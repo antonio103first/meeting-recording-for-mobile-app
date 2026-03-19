@@ -1,0 +1,320 @@
+package com.krunventures.meetingrecorder.service
+
+import com.google.ai.client.generativeai.GenerativeModel
+import com.google.ai.client.generativeai.type.content
+import com.google.ai.client.generativeai.type.generationConfig
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.*
+
+class GeminiService {
+    companion object {
+        const val STT_MODEL = "gemini-2.0-flash"
+        const val SUMMARY_MODEL = "gemini-2.0-flash"
+    }
+
+    data class ServiceResult(val success: Boolean, val text: String)
+
+    suspend fun testConnection(apiKey: String): ServiceResult {
+        return try {
+            val model = GenerativeModel(
+                modelName = SUMMARY_MODEL,
+                apiKey = apiKey,
+                generationConfig = generationConfig { maxOutputTokens = 10 }
+            )
+            model.generateContent("안녕")
+            ServiceResult(true, "연결 성공! ($SUMMARY_MODEL 사용 가능)")
+        } catch (e: Exception) {
+            ServiceResult(false, friendlyError(e.message ?: "알 수 없는 오류"))
+        }
+    }
+
+    suspend fun transcribe(
+        audioFile: File,
+        apiKey: String,
+        numSpeakers: Int = 0,
+        onProgress: ((Int) -> Unit)? = null,
+        onStatus: ((String) -> Unit)? = null
+    ): ServiceResult {
+        if (apiKey.isBlank()) return ServiceResult(false, "Gemini API 키가 없습니다. 설정에서 입력해주세요.")
+        if (!audioFile.exists()) return ServiceResult(false, "파일을 찾을 수 없습니다: ${audioFile.name}")
+
+        val sizeMb = audioFile.length() / (1024.0 * 1024.0)
+        val sttPrompt = makeSttPrompt(numSpeakers)
+
+        return try {
+            val model = GenerativeModel(
+                modelName = STT_MODEL,
+                apiKey = apiKey,
+                generationConfig = generationConfig {
+                    temperature = 0.1f
+                    maxOutputTokens = 65536
+                }
+            )
+            onProgress?.invoke(5)
+            onStatus?.invoke("STT 변환 준비 중... (${String.format("%.1f", sizeMb)}MB)")
+
+            val audioBytes = audioFile.readBytes()
+            val mimeType = when (audioFile.extension.lowercase()) {
+                "mp3" -> "audio/mp3"
+                "wav" -> "audio/wav"
+                "m4a" -> "audio/mp4"
+                "ogg" -> "audio/ogg"
+                "flac" -> "audio/flac"
+                else -> "audio/mp4"
+            }
+
+            onStatus?.invoke("Gemini STT 변환 중... (1~10분 소요)")
+            onProgress?.invoke(40)
+
+            val response = model.generateContent(
+                content {
+                    text(sttPrompt)
+                    blob(mimeType, audioBytes)
+                }
+            )
+
+            val text = response.text ?: return ServiceResult(false, "Gemini STT 응답이 비어 있습니다.")
+            onProgress?.invoke(100)
+            ServiceResult(true, text)
+        } catch (e: Exception) {
+            ServiceResult(false, friendlyError(e.message ?: ""))
+        }
+    }
+
+    suspend fun summarize(
+        sttText: String,
+        apiKey: String,
+        summaryMode: String = "speaker",
+        customInstruction: String = "",
+        onProgress: ((Int) -> Unit)? = null
+    ): ServiceResult {
+        if (apiKey.isBlank()) return ServiceResult(false, "Gemini API 키가 없습니다.")
+        if (sttText.isBlank()) return ServiceResult(false, "변환된 텍스트가 비어 있습니다.")
+
+        val template = getTemplate(summaryMode)
+        return try {
+            val model = GenerativeModel(
+                modelName = SUMMARY_MODEL,
+                apiKey = apiKey,
+                generationConfig = generationConfig {
+                    temperature = 0.3f
+                    maxOutputTokens = 65536
+                }
+            )
+            onProgress?.invoke(10)
+            val dt = SimpleDateFormat("yyyy년 MM월 dd일 HH:mm", Locale.KOREAN).format(Date())
+            var prompt = template.replace("{text}", sttText.take(500000)).replace("{dt}", dt)
+            if (customInstruction.isNotBlank()) {
+                prompt += "\n\n[추가 지시사항]\n${customInstruction.trim()}"
+            }
+            onProgress?.invoke(30)
+
+            val response = model.generateContent(prompt)
+            val result = response.text ?: return ServiceResult(false, "요약 응답이 비어 있습니다.")
+            onProgress?.invoke(100)
+            ServiceResult(true, trimSummary(result))
+        } catch (e: Exception) {
+            ServiceResult(false, friendlyError(e.message ?: ""))
+        }
+    }
+
+    suspend fun extractKeyMetrics(summaryText: String, apiKey: String): ServiceResult {
+        if (apiKey.isBlank()) return ServiceResult(false, "Gemini API 키가 없습니다.")
+        if (summaryText.isBlank()) return ServiceResult(false, "요약 텍스트가 비어 있습니다.")
+
+        val prompt = """다음 회의록 요약에서 핵심 정보를 추출해주세요.
+
+[요약 텍스트]
+${summaryText.take(100000)}
+
+[출력 형식]
+📋 결정사항
+- (결정된 사항 나열, 없으면 "없음")
+
+✅ 액션 아이템
+- 담당자: X | 업무: Y | 기한: Z (없으면 "없음")
+
+📅 주요 일정
+- (날짜/기한 포함 일정, 없으면 "없음")
+
+🔢 핵심 수치
+- (금액, 기간, 비율 등 주요 숫자, 없으면 "없음")
+
+🏷️ 키워드
+- (3~7개, 쉼표로 구분)"""
+
+        return try {
+            val model = GenerativeModel(
+                modelName = SUMMARY_MODEL,
+                apiKey = apiKey,
+                generationConfig = generationConfig {
+                    temperature = 0.2f
+                    maxOutputTokens = 4096
+                }
+            )
+            val response = model.generateContent(prompt)
+            ServiceResult(true, response.text ?: "핵심 지표 응답이 비어 있습니다.")
+        } catch (e: Exception) {
+            ServiceResult(false, friendlyError(e.message ?: ""))
+        }
+    }
+
+    private fun makeSttPrompt(numSpeakers: Int): String {
+        val rule = when {
+            numSpeakers == 1 -> "- 화자가 1명이므로 화자 구분 없이 전사\n"
+            numSpeakers >= 2 -> "- 화자가 ${numSpeakers}명입니다. [화자1], [화자2]${if (numSpeakers >= 3) ", [화자3]" else ""} 형식으로 구분\n"
+            else -> "- 여러 화자는 [화자1], [화자2] 형식으로 구분\n"
+        }
+        return """이 오디오 파일을 한국어 텍스트로 정확히 전사해주세요.
+
+규칙:
+${rule}- 불명확한 부분은 [불명확] 표시
+- 의미 없는 짧은 반복(어, 음 등)은 생략
+- 전사 결과만 출력하고 설명 없이 바로 시작"""
+    }
+
+    private fun getTemplate(mode: String): String = when (mode) {
+        "topic" -> SUMMARY_TOPIC
+        "formal_md" -> SUMMARY_FORMAL_MD
+        "formal_text" -> SUMMARY_FORMAL_TEXT
+        "lecture_md" -> SUMMARY_LECTURE_MD
+        else -> SUMMARY_SPEAKER
+    }
+
+    private fun trimSummary(text: String): String {
+        val marker = "회의녹음요약 앱 자동 생성"
+        val idx = text.indexOf(marker)
+        return if (idx != -1) text.substring(0, idx + marker.length).trim() else text.trim()
+    }
+
+    private fun friendlyError(msg: String): String = when {
+        "UNAUTHENTICATED" in msg || "no credentials" in msg.lowercase() ->
+            "Gemini API 키가 설정되지 않았습니다. 설정에서 입력해주세요."
+        "API_KEY_INVALID" in msg -> "API 키가 올바르지 않습니다."
+        "PERMISSION_DENIED" in msg || "403" in msg -> "API 키 권한이 없습니다."
+        "429" in msg || "RESOURCE_EXHAUSTED" in msg -> "API 요청 한도 초과입니다. 잠시 후 다시 시도해주세요."
+        "timeout" in msg.lowercase() -> "처리 시간이 초과되었습니다."
+        else -> "Gemini 오류: ${msg.take(300)}"
+    }
+
+    // ── Templates (same as original Python) ──
+    companion object {
+        val SUMMARY_SPEAKER = """당신은 전문 회의록 작성 전문가입니다.
+다음 회의 전사 내용을 바탕으로 화자(참석자) 중심의 한국어 회의록을 작성해주세요.
+
+[전사 내용]
+{text}
+
+[회의록 양식]
+## 📋 회의록 (화자 중심)
+생성 일시: {dt}
+
+### 1. 회의 개요
+- 주요 안건:
+- 참석자:
+
+### 2. 참석자별 주요 내용
+
+### 3. 액션 아이템
+| 담당자 | 내용 | 기한 |
+|--------|------|------|
+
+---
+회의녹음요약 앱 자동 생성"""
+
+        val SUMMARY_TOPIC = """당신은 전문 회의록 작성 전문가입니다.
+다음 회의 전사 내용을 바탕으로 주제/안건 중심의 한국어 회의록을 작성해주세요.
+
+[전사 내용]
+{text}
+
+[회의록 양식]
+## 📋 회의록 (주제 중심)
+생성 일시: {dt}
+
+### 1. 회의 개요
+- 참석자(언급된 경우):
+- 회의요약: 3줄내외(경영진보고 수준)
+
+### 2. 논의 내용
+
+### 3. 추가 논의 필요사항
+
+---
+회의녹음요약 앱 자동 생성"""
+
+        val SUMMARY_FORMAL_MD = """너는 복잡한 회의 녹취록을 분석하여 핵심 정보를 체계적으로 정리하는 비즈니스 컨설턴트야.
+제공된 텍스트의 모든 논의 사항을 놓치지 않으면서도, 읽기 쉽게 요약하여 마크다운(MD) 형식으로 회의록을 작성해줘.
+
+[작성 가이드라인]
+1. 완결성: 회의에서 언급된 모든 수치, 업체명, 전략, 리스크 및 결정 사항을 빠짐없이 포함할 것.
+2. 구조화: 주요 내용을 위계에 따라 분류할 것.
+3. 간결성: 명사형 종결이나 '~함', '~임' 등의 간결한 문체를 사용할 것.
+4. Action Item: 담당자, 기한, 구체적인 실행 과제를 명확히 추출할 것.
+
+[전사 내용]
+{text}
+
+[출력 양식]
+# 회 의 록
+생성 일시: {dt}
+
+---
+| 항목 | 내용 |
+|------|------|
+| 일 시 | {dt} |
+| 장 소 | |
+| 주 제 | |
+| 참 석 자 | |
+| 작 성 자 | AI 자동 생성 |
+
+## 1. 회의 배경 및 목적
+## 2. 주요 논의 내용
+## 3. 결정 사항
+## 4. 리스크 및 우려 사항
+## 5. Action Items
+
+---
+회의녹음요약 앱 자동 생성"""
+
+        val SUMMARY_FORMAL_TEXT = """너는 복잡한 회의 녹취록을 분석하여 핵심 정보를 체계적으로 정리하는 비즈니스 컨설턴트야.
+제공된 텍스트의 모든 논의 사항을 놓치지 않으면서도, 읽기 쉽게 요약하여 일반 텍스트 형식으로 회의록을 작성해줘.
+마크다운 기호(#, *, ** 등)는 사용하지 말 것.
+
+[전사 내용]
+{text}
+
+[출력 양식]
+==============================
+회 의 록
+생성 일시: {dt}
+==============================
+1. 회의 배경 및 목적
+2. 주요 논의 내용
+3. 결정 사항
+4. 리스크 및 우려 사항
+5. Action Items
+==============================
+회의녹음요약 앱 자동 생성"""
+
+        val SUMMARY_LECTURE_MD = """당신은 전문 강의 노트 작성자입니다.
+아래 강의 녹취록을 분석하여 수강생이 복습과 학습에 바로 활용할 수 있는 구조화된 마크다운 강의 요약문을 작성해주세요.
+
+[강의 녹취록]
+{text}
+
+[작성 양식]
+생성 일시: {dt}
+
+# 📚 강의 요약 노트
+**주요 주제**: (핵심 주제 한 줄 요약)
+
+## 1. 강의 개요
+## 2. 주요 내용 정리
+## 3. 핵심 요약 (3줄 정리)
+
+---
+강의녹음요약 앱 자동 생성"""
+    }
+}

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.MeetingRecorder" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">#2C3E50</item>
+        <item name="android:navigationBarColor">#FFFFFF</item>
+    </style>
+</resources>
