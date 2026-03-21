@@ -42,13 +42,23 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun requestPermissions() {
-        val perms = mutableListOf(Manifest.permission.RECORD_AUDIO)
+        val perms = mutableListOf(
+            Manifest.permission.RECORD_AUDIO,
+            Manifest.permission.READ_PHONE_STATE
+        )
+
+        // 전화 수락/거절 제어 (Android 8.0+)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            perms.add(Manifest.permission.ANSWER_PHONE_CALLS)
+        }
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             perms.add(Manifest.permission.READ_MEDIA_AUDIO)
             perms.add(Manifest.permission.POST_NOTIFICATIONS)
         } else if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.S_V2) {
             perms.add(Manifest.permission.READ_EXTERNAL_STORAGE)
         }
+
         val needed = perms.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }

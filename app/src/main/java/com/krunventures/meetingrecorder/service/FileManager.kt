@@ -30,6 +30,35 @@ class FileManager {
         }
     }
 
+    /**
+     * 회의록요약 + STT변환을 하나의 통합 파일로 저장
+     * 배치 순서: 1) 회의록 요약  2) STT 변환 원문
+     */
+    fun saveCombinedSummary(summaryText: String, sttText: String, saveDir: File, fileName: String): Result<File> {
+        return try {
+            saveDir.mkdirs()
+            val combined = buildString {
+                appendLine("=" .repeat(60))
+                appendLine("【 회의록 요약 】")
+                appendLine("=".repeat(60))
+                appendLine()
+                appendLine(summaryText.trim())
+                appendLine()
+                appendLine()
+                appendLine("=".repeat(60))
+                appendLine("【 STT 변환 원문 】")
+                appendLine("=".repeat(60))
+                appendLine()
+                appendLine(sttText.trim())
+            }
+            val file = File(saveDir, "${fileName}.txt")
+            file.writeText(combined, Charsets.UTF_8)
+            Result.success(file)
+        } catch (e: Exception) {
+            Result.failure(Exception("통합 요약 파일 저장 실패: ${e.message}"))
+        }
+    }
+
     fun copyAudioToSaveDir(srcFile: File, saveDir: File, fileName: String): Result<File> {
         return try {
             saveDir.mkdirs()

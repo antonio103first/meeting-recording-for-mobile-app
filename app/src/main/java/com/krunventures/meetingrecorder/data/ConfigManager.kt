@@ -3,9 +3,10 @@ package com.krunventures.meetingrecorder.data
 import android.content.Context
 import android.content.SharedPreferences
 import android.os.Environment
+import android.util.Log
 import java.io.File
 
-class ConfigManager(context: Context) {
+class ConfigManager(private val context: Context) {
     private val prefs: SharedPreferences =
         context.getSharedPreferences("meeting_config", Context.MODE_PRIVATE)
 
@@ -39,16 +40,32 @@ class ConfigManager(context: Context) {
         get() = prefs.getString("summary_mode", "speaker") ?: "speaker"
         set(v) = prefs.edit().putString("summary_mode", v).apply()
 
-    // === Storage Paths (Samsung Galaxy S25 optimized) ===
+    // === Storage Paths (Android 16 호환 — 앱 전용 디렉토리 사용) ===
+    // getExternalFilesDir()는 권한 없이 읽기/쓰기 가능, 앱 삭제 시 같이 삭제됨
     private val defaultBaseDir: String
         get() {
-            val docs = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS)
-            return File(docs, "Meeting recording").absolutePath
+            // 우선 앱 전용 외부 저장소 사용 (권한 불필요)
+            val appDir = context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS)
+            if (appDir != null) {
+                return File(appDir, "Meeting recording").absolutePath
+            }
+            // 폴백: 내부 저장소
+            return File(context.filesDir, "Meeting recording").absolutePath
         }
 
     var recordingDir: String
-        get() = prefs.getString("recording_dir", defaultBaseDir) ?: defaultBaseDir
-        set(v) = prefs.edit().putString("recording_dir", v).apply()
+        get() {
+            val saved = prefs.getString("recording_dir_v2", null)
+            if (saved != null) return saved
+            // 기존 v1 경로가 있으면 마이그레이션
+            val legacyDir = prefs.getString("recording_dir", null)
+            if (legacyDir != null && legacyDir.startsWith("/storage/emulated")) {
+                // 레거시 공용 저장소 경로 → 앱 전용으로 마이그레이션
+                Log.w(TAG, "Migrating from legacy storage path: $legacyDir")
+            }
+            return defaultBaseDir
+        }
+        set(v) = prefs.edit().putString("recording_dir_v2", v).apply()
 
     var audioSubdir: String
         get() = prefs.getString("audio_subdir", "녹음파일") ?: "녹음파일"
@@ -59,18 +76,37 @@ class ConfigManager(context: Context) {
         set(v) = prefs.edit().putString("summary_subdir", v).apply()
 
     val audioSaveDir: File
-        get() = File(recordingDir, audioSubdir).also { it.mkdirs() }
+        get() = File(recordingDir, audioSubdir).also {
+            if (!it.exists()) {
+                val created = it.mkdirs()
+                Log.d(TAG, "audioSaveDir mkdirs: $created, path: ${it.absolutePath}")
+            }
+        }
 
     val summarySaveDir: File
-        get() = File(audioSaveDir, summarySubdir).also { it.mkdirs() }
+        get() = File(recordingDir, summarySubdir).also {
+            if (!it.exists()) {
+                val created = it.mkdirs()
+                Log.d(TAG, "summarySaveDir mkdirs: $created, path: ${it.absolutePath}")
+            }
+        }
 
     // === Google Drive ===
+    // 기본 폴더 ID — 사용자 Drive에 이미 존재하는 폴더
+    companion object {
+        private const val TAG = "ConfigManager"
+        // 녹음파일 폴더: https://drive.google.com/drive/folders/1Yu6snQUtwl62j98b64Foi5iZ7mqn2GpS
+        private const val DEFAULT_DRIVE_MP3_FOLDER_ID = "1Yu6snQUtwl62j98b64Foi5iZ7mqn2GpS"
+        // 회의록 폴더: https://drive.google.com/drive/folders/1R8WbbJrhm3PLG0wZ0NPim_Kc6KRt9GHX
+        private const val DEFAULT_DRIVE_TXT_FOLDER_ID = "1R8WbbJrhm3PLG0wZ0NPim_Kc6KRt9GHX"
+    }
+
     var driveMp3FolderId: String
-        get() = prefs.getString("drive_mp3_folder_id", "") ?: ""
+        get() = prefs.getString("drive_mp3_folder_id", DEFAULT_DRIVE_MP3_FOLDER_ID) ?: DEFAULT_DRIVE_MP3_FOLDER_ID
         set(v) = prefs.edit().putString("drive_mp3_folder_id", v).apply()
 
     var driveTxtFolderId: String
-        get() = prefs.getString("drive_txt_folder_id", "") ?: ""
+        get() = prefs.getString("drive_txt_folder_id", DEFAULT_DRIVE_TXT_FOLDER_ID) ?: DEFAULT_DRIVE_TXT_FOLDER_ID
         set(v) = prefs.edit().putString("drive_txt_folder_id", v).apply()
 
     var driveAutoUpload: Boolean
@@ -89,7 +125,13 @@ class ConfigManager(context: Context) {
     }
 
     fun ensureDirs() {
-        audioSaveDir.mkdirs()
-        summarySaveDir.mkdirs()
+        try {
+            val audioDir = audioSaveDir
+            val summaryDir = summarySaveDir
+            Log.d(TAG, "ensureDirs — audio: ${audioDir.absolutePath} (exists=${audioDir.exists()}, writable=${audioDir.canWrite()})")
+            Log.d(TAG, "ensureDirs — summary: ${summaryDir.absolutePath} (exists=${summaryDir.exists()}, writable=${summaryDir.canWrite()})")
+        } catch (e: Exception) {
+            Log.e(TAG, "ensureDirs failed", e)
+        }
     }
 }

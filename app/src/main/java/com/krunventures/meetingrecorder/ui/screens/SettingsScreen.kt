@@ -1,8 +1,18 @@
 package com.krunventures.meetingrecorder.ui.screens
 
+import android.app.Activity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CloudUpload
+import androidx.compose.material.icons.filled.CreateNewFolder
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -12,6 +22,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import com.krunventures.meetingrecorder.ui.theme.*
 import com.krunventures.meetingrecorder.viewmodel.SettingsViewModel
 
@@ -20,15 +31,143 @@ fun SettingsScreen(viewModel: SettingsViewModel) {
     val state by viewModel.uiState.collectAsState()
     val scrollState = rememberScrollState()
 
+    // Google Sign-In launcher
+    val signInLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            viewModel.handleSignInResult(result.data)
+        }
+    }
+
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(scrollState).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        // === Engine Selection (맨 상단) ===
+        Card(colors = CardDefaults.cardColors(containerColor = CardBg), elevation = CardDefaults.cardElevation(2.dp)) {
+            Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+                Text("⚙ 엔진 설정", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = TextDark)
+                Divider(modifier = Modifier.padding(vertical = 8.dp))
+
+                Text("STT 엔진:", fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    RadioButton(selected = state.sttEngine == "clova", onClick = { viewModel.setSttEngine("clova") })
+                    Text("CLOVA Speech (권장)", fontSize = 13.sp)
+                    Spacer(Modifier.width(16.dp))
+                    RadioButton(selected = state.sttEngine == "gemini", onClick = { viewModel.setSttEngine("gemini") })
+                    Text("Gemini", fontSize = 13.sp)
+                }
+
+                Spacer(Modifier.height(8.dp))
+                Text("요약 엔진:", fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    RadioButton(selected = state.aiEngine == "gemini", onClick = { viewModel.setAiEngine("gemini") })
+                    Text("Gemini", fontSize = 13.sp)
+                    Spacer(Modifier.width(16.dp))
+                    RadioButton(selected = state.aiEngine == "claude", onClick = { viewModel.setAiEngine("claude") })
+                    Text("Claude", fontSize = 13.sp)
+                }
+
+                Spacer(Modifier.height(8.dp))
+                Text("요약 방식:", fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                Column {
+                    listOf(
+                        "speaker" to "화자 중심", "topic" to "주제 중심",
+                        "formal_md" to "공식 양식 (MD)", "formal_text" to "공식 양식 (텍스트)",
+                        "lecture_md" to "강의 요약"
+                    ).forEach { (value, label) ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            RadioButton(selected = state.summaryMode == value, onClick = { viewModel.setSummaryMode(value) })
+                            Text(label, fontSize = 13.sp)
+                        }
+                    }
+                }
+            }
+        }
+
+        // === Google Drive ===
+        Card(colors = CardDefaults.cardColors(containerColor = CardBg), elevation = CardDefaults.cardElevation(2.dp)) {
+            Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+                Text("☁ Google Drive 설정", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = TextDark)
+                Divider(modifier = Modifier.padding(vertical = 8.dp))
+
+                if (state.driveSignedIn) {
+                    // 로그인 상태
+                    Text("✅ ${state.driveEmail}", fontSize = 13.sp, color = Success)
+                    Spacer(Modifier.height(8.dp))
+
+                    // 자동 업로드 토글
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Filled.CloudUpload, contentDescription = null, tint = Accent, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("변환 완료 후 자동 업로드", fontSize = 14.sp, modifier = Modifier.weight(1f))
+                        Switch(
+                            checked = state.driveAutoUpload,
+                            onCheckedChange = { viewModel.setDriveAutoUpload(it) },
+                            colors = SwitchDefaults.colors(checkedThumbColor = Accent, checkedTrackColor = Accent.copy(alpha = 0.3f))
+                        )
+                    }
+                    Spacer(Modifier.height(12.dp))
+
+                    // 녹음파일 폴더
+                    Text("녹음 파일 폴더:", fontWeight = FontWeight.Medium, fontSize = 13.sp)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                    ) {
+                        Icon(Icons.Filled.Folder, contentDescription = null, tint = TextLight, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(state.driveMp3FolderName.ifBlank { "미설정" }, fontSize = 12.sp, color = TextLight, modifier = Modifier.weight(1f))
+                        TextButton(onClick = { viewModel.showFolderPicker("mp3") }) {
+                            Text("변경", fontSize = 12.sp)
+                        }
+                    }
+
+                    // 회의록 폴더
+                    Text("회의록 폴더:", fontWeight = FontWeight.Medium, fontSize = 13.sp)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                    ) {
+                        Icon(Icons.Filled.Folder, contentDescription = null, tint = TextLight, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(state.driveTxtFolderName.ifBlank { "미설정" }, fontSize = 12.sp, color = TextLight, modifier = Modifier.weight(1f))
+                        TextButton(onClick = { viewModel.showFolderPicker("txt") }) {
+                            Text("변경", fontSize = 12.sp)
+                        }
+                    }
+
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(onClick = { viewModel.signOutDrive() }) {
+                        Text("Google 로그아웃", fontSize = 13.sp)
+                    }
+                } else {
+                    // 미로그인 상태
+                    Text("Google Drive에 로그인하면 녹음파일과 회의록이 자동으로 업로드됩니다.", fontSize = 12.sp, color = TextLight)
+                    Spacer(Modifier.height(8.dp))
+                    Button(
+                        onClick = { signInLauncher.launch(viewModel.getSignInIntent()) },
+                        colors = ButtonDefaults.buttonColors(containerColor = Accent)
+                    ) {
+                        Text("Google 로그인")
+                    }
+                }
+
+                if (state.driveStatus.isNotEmpty()) {
+                    Text(state.driveStatus, fontSize = 12.sp, color = TextLight, modifier = Modifier.padding(top = 4.dp))
+                }
+            }
+        }
+
         // === Gemini API ===
         Card(colors = CardDefaults.cardColors(containerColor = CardBg), elevation = CardDefaults.cardElevation(2.dp)) {
             Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
                 Text("🤖 Gemini API 설정", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = TextDark)
-                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                Divider(modifier = Modifier.padding(vertical = 8.dp))
 
                 var showGemKey by remember { mutableStateOf(false) }
                 OutlinedTextField(
@@ -61,7 +200,7 @@ fun SettingsScreen(viewModel: SettingsViewModel) {
         Card(colors = CardDefaults.cardColors(containerColor = CardBg), elevation = CardDefaults.cardElevation(2.dp)) {
             Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
                 Text("🎤 CLOVA Speech API 설정", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = TextDark)
-                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                Divider(modifier = Modifier.padding(vertical = 8.dp))
                 Text("한국어 특화 STT — 긴 회의 녹음도 안정적 처리", fontSize = 12.sp, color = Success)
                 Spacer(Modifier.height(8.dp))
 
@@ -105,7 +244,7 @@ fun SettingsScreen(viewModel: SettingsViewModel) {
         Card(colors = CardDefaults.cardColors(containerColor = CardBg), elevation = CardDefaults.cardElevation(2.dp)) {
             Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
                 Text("🧠 Claude API 설정", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = TextDark)
-                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                Divider(modifier = Modifier.padding(vertical = 8.dp))
 
                 var showClaudeKey by remember { mutableStateOf(false) }
                 OutlinedTextField(
@@ -128,53 +267,11 @@ fun SettingsScreen(viewModel: SettingsViewModel) {
             }
         }
 
-        // === Engine Selection ===
-        Card(colors = CardDefaults.cardColors(containerColor = CardBg), elevation = CardDefaults.cardElevation(2.dp)) {
-            Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
-                Text("⚙ 엔진 설정", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = TextDark)
-                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-
-                Text("STT 엔진:", fontWeight = FontWeight.Medium, fontSize = 14.sp)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    RadioButton(selected = state.sttEngine == "clova", onClick = { viewModel.setSttEngine("clova") })
-                    Text("CLOVA Speech (권장)", fontSize = 13.sp)
-                    Spacer(Modifier.width(16.dp))
-                    RadioButton(selected = state.sttEngine == "gemini", onClick = { viewModel.setSttEngine("gemini") })
-                    Text("Gemini", fontSize = 13.sp)
-                }
-
-                Spacer(Modifier.height(8.dp))
-                Text("요약 엔진:", fontWeight = FontWeight.Medium, fontSize = 14.sp)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    RadioButton(selected = state.aiEngine == "gemini", onClick = { viewModel.setAiEngine("gemini") })
-                    Text("Gemini", fontSize = 13.sp)
-                    Spacer(Modifier.width(16.dp))
-                    RadioButton(selected = state.aiEngine == "claude", onClick = { viewModel.setAiEngine("claude") })
-                    Text("Claude", fontSize = 13.sp)
-                }
-
-                Spacer(Modifier.height(8.dp))
-                Text("요약 방식:", fontWeight = FontWeight.Medium, fontSize = 14.sp)
-                Column {
-                    listOf(
-                        "speaker" to "화자 중심", "topic" to "주제 중심",
-                        "formal_md" to "공식 양식 (MD)", "formal_text" to "공식 양식 (텍스트)",
-                        "lecture_md" to "강의 요약"
-                    ).forEach { (value, label) ->
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            RadioButton(selected = state.summaryMode == value, onClick = { viewModel.setSummaryMode(value) })
-                            Text(label, fontSize = 13.sp)
-                        }
-                    }
-                }
-            }
-        }
-
         // === Storage Info ===
         Card(colors = CardDefaults.cardColors(containerColor = CardBg), elevation = CardDefaults.cardElevation(2.dp)) {
             Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
                 Text("📁 저장 경로", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = TextDark)
-                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                Divider(modifier = Modifier.padding(vertical = 8.dp))
                 Text("녹음 파일: ${state.audioSaveDir}", fontSize = 12.sp, color = TextLight)
                 Text("회의록: ${state.summarySaveDir}", fontSize = 12.sp, color = TextLight)
                 Spacer(Modifier.height(4.dp))
@@ -183,5 +280,183 @@ fun SettingsScreen(viewModel: SettingsViewModel) {
         }
 
         Spacer(Modifier.height(80.dp))
+    }
+
+    // === Folder Picker Dialog ===
+    if (state.showFolderPicker) {
+        DriveFolderPickerDialog(
+            folders = state.driveFolders,
+            target = if (state.folderPickerTarget == "mp3") "녹음 파일" else "회의록",
+            isLoading = state.folderPickerLoading,
+            path = state.folderPickerPath,
+            onSelect = { id, name -> viewModel.selectDriveFolder(id, name) },
+            onNavigate = { id, name -> viewModel.navigateToFolder(id, name) },
+            onNavigateUp = { viewModel.navigateUp() },
+            onNavigateToPath = { index -> viewModel.navigateToPathIndex(index) },
+            onCreateNew = { name -> viewModel.createNewDriveFolder(name) },
+            onDismiss = { viewModel.dismissFolderPicker() }
+        )
+    }
+}
+
+@Composable
+fun DriveFolderPickerDialog(
+    folders: List<Pair<String, String>>,
+    target: String,
+    isLoading: Boolean,
+    path: List<Pair<String, String>>,
+    onSelect: (String, String) -> Unit,
+    onNavigate: (String, String) -> Unit,
+    onNavigateUp: () -> Unit,
+    onNavigateToPath: (Int) -> Unit,
+    onCreateNew: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var newFolderName by remember { mutableStateOf("") }
+    var showNewFolder by remember { mutableStateOf(false) }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            modifier = Modifier.fillMaxWidth().heightIn(max = 500.dp),
+            colors = CardDefaults.cardColors(containerColor = CardBg)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("$target 저장 폴더 선택", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                Divider(modifier = Modifier.padding(vertical = 8.dp))
+
+                // Breadcrumb navigation
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                ) {
+                    path.forEachIndexed { index, (_, name) ->
+                        if (index > 0) {
+                            Text(" > ", fontSize = 12.sp, color = TextLight)
+                        }
+                        val isLast = index == path.size - 1
+                        Text(
+                            text = name,
+                            fontSize = 12.sp,
+                            fontWeight = if (isLast) FontWeight.Bold else FontWeight.Normal,
+                            color = if (isLast) TextDark else Accent,
+                            modifier = if (!isLast) Modifier.clickable { onNavigateToPath(index) } else Modifier
+                        )
+                    }
+                }
+
+                // Back button (if not at root)
+                if (path.size > 1) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onNavigateUp() }
+                            .padding(vertical = 6.dp)
+                    ) {
+                        Text("⬆", fontSize = 16.sp)
+                        Spacer(Modifier.width(8.dp))
+                        Text("상위 폴더로", fontSize = 13.sp, color = Accent)
+                    }
+                    Divider(modifier = Modifier.padding(vertical = 4.dp))
+                }
+
+                if (isLoading) {
+                    Box(
+                        modifier = Modifier.fillMaxWidth().height(100.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(32.dp), color = Accent)
+                    }
+                } else if (folders.isEmpty()) {
+                    Text(
+                        "이 폴더에 하위 폴더가 없습니다.\n이 폴더를 선택하거나 새 폴더를 만드세요.",
+                        fontSize = 13.sp, color = TextLight,
+                        modifier = Modifier.padding(vertical = 12.dp)
+                    )
+                } else {
+                    LazyColumn(modifier = Modifier.weight(1f, fill = false).heightIn(max = 220.dp)) {
+                        items(folders) { (id, name) ->
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp)
+                            ) {
+                                // Folder icon + name — tap to navigate into
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clickable { onNavigate(id, name) }
+                                        .padding(vertical = 6.dp, horizontal = 4.dp)
+                                ) {
+                                    Icon(Icons.Filled.Folder, contentDescription = null, tint = Accent, modifier = Modifier.size(20.dp))
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(name, fontSize = 14.sp)
+                                }
+                                // Select button
+                                TextButton(
+                                    onClick = { onSelect(id, name) },
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                                ) {
+                                    Text("선택", fontSize = 12.sp, color = Accent)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Select current folder button (when navigated into a subfolder)
+                if (path.size > 1 && !isLoading) {
+                    val currentFolder = path.last()
+                    Spacer(Modifier.height(4.dp))
+                    Button(
+                        onClick = { onSelect(currentFolder.first, currentFolder.second) },
+                        colors = ButtonDefaults.buttonColors(containerColor = Accent),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("이 폴더 선택 (${currentFolder.second})", fontSize = 13.sp)
+                    }
+                }
+
+                Spacer(Modifier.height(8.dp))
+
+                if (showNewFolder) {
+                    OutlinedTextField(
+                        value = newFolderName,
+                        onValueChange = { newFolderName = it },
+                        label = { Text("새 폴더 이름") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = {
+                                if (newFolderName.isNotBlank()) {
+                                    onCreateNew(newFolderName)
+                                    newFolderName = ""
+                                    showNewFolder = false
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Accent),
+                            enabled = newFolderName.isNotBlank()
+                        ) { Text("생성") }
+                        TextButton(onClick = { showNewFolder = false }) { Text("취소") }
+                    }
+                } else {
+                    OutlinedButton(onClick = { showNewFolder = true }) {
+                        Icon(Icons.Filled.CreateNewFolder, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("새 폴더 만들기", fontSize = 13.sp)
+                    }
+                }
+
+                Spacer(Modifier.height(8.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onDismiss) { Text("닫기") }
+                }
+            }
+        }
     }
 }

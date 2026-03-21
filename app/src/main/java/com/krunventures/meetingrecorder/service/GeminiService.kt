@@ -1,205 +1,42 @@
 package com.krunventures.meetingrecorder.service
 
-import com.google.ai.client.generativeai.GenerativeModel
-import com.google.ai.client.generativeai.type.content
-import com.google.ai.client.generativeai.type.generationConfig
+import android.util.Base64
+import com.google.gson.Gson
+import com.google.gson.JsonArray
+import com.google.gson.JsonObject
+import okhttp3.*
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
+import java.util.concurrent.TimeUnit
 
 class GeminiService {
-    companion object {
-        const val STT_MODEL = "gemini-2.0-flash"
-        const val SUMMARY_MODEL = "gemini-2.0-flash"
-    }
 
     data class ServiceResult(val success: Boolean, val text: String)
 
-    suspend fun testConnection(apiKey: String): ServiceResult {
-        return try {
-            val model = GenerativeModel(
-                modelName = SUMMARY_MODEL,
-                apiKey = apiKey,
-                generationConfig = generationConfig { maxOutputTokens = 10 }
-            )
-            model.generateContent("안녕")
-            ServiceResult(true, "연결 성공! ($SUMMARY_MODEL 사용 가능)")
-        } catch (e: Exception) {
-            ServiceResult(false, friendlyError(e.message ?: "알 수 없는 오류"))
-        }
-    }
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(600, TimeUnit.SECONDS)
+        .writeTimeout(120, TimeUnit.SECONDS)
+        .build()
+    private val gson = Gson()
 
-    suspend fun transcribe(
-        audioFile: File,
-        apiKey: String,
-        numSpeakers: Int = 0,
-        onProgress: ((Int) -> Unit)? = null,
-        onStatus: ((String) -> Unit)? = null
-    ): ServiceResult {
-        if (apiKey.isBlank()) return ServiceResult(false, "Gemini API 키가 없습니다. 설정에서 입력해주세요.")
-        if (!audioFile.exists()) return ServiceResult(false, "파일을 찾을 수 없습니다: ${audioFile.name}")
+    // 사용 가능한 모델 (자동 감지 후 설정됨)
+    private var activeModel: String = "gemini-2.5-flash"
 
-        val sizeMb = audioFile.length() / (1024.0 * 1024.0)
-        val sttPrompt = makeSttPrompt(numSpeakers)
-
-        return try {
-            val model = GenerativeModel(
-                modelName = STT_MODEL,
-                apiKey = apiKey,
-                generationConfig = generationConfig {
-                    temperature = 0.1f
-                    maxOutputTokens = 65536
-                }
-            )
-            onProgress?.invoke(5)
-            onStatus?.invoke("STT 변환 준비 중... (${String.format("%.1f", sizeMb)}MB)")
-
-            val audioBytes = audioFile.readBytes()
-            val mimeType = when (audioFile.extension.lowercase()) {
-                "mp3" -> "audio/mp3"
-                "wav" -> "audio/wav"
-                "m4a" -> "audio/mp4"
-                "ogg" -> "audio/ogg"
-                "flac" -> "audio/flac"
-                else -> "audio/mp4"
-            }
-
-            onStatus?.invoke("Gemini STT 변환 중... (1~10분 소요)")
-            onProgress?.invoke(40)
-
-            val response = model.generateContent(
-                content {
-                    text(sttPrompt)
-                    blob(mimeType, audioBytes)
-                }
-            )
-
-            val text = response.text ?: return ServiceResult(false, "Gemini STT 응답이 비어 있습니다.")
-            onProgress?.invoke(100)
-            ServiceResult(true, text)
-        } catch (e: Exception) {
-            ServiceResult(false, friendlyError(e.message ?: ""))
-        }
-    }
-
-    suspend fun summarize(
-        sttText: String,
-        apiKey: String,
-        summaryMode: String = "speaker",
-        customInstruction: String = "",
-        onProgress: ((Int) -> Unit)? = null
-    ): ServiceResult {
-        if (apiKey.isBlank()) return ServiceResult(false, "Gemini API 키가 없습니다.")
-        if (sttText.isBlank()) return ServiceResult(false, "변환된 텍스트가 비어 있습니다.")
-
-        val template = getTemplate(summaryMode)
-        return try {
-            val model = GenerativeModel(
-                modelName = SUMMARY_MODEL,
-                apiKey = apiKey,
-                generationConfig = generationConfig {
-                    temperature = 0.3f
-                    maxOutputTokens = 65536
-                }
-            )
-            onProgress?.invoke(10)
-            val dt = SimpleDateFormat("yyyy년 MM월 dd일 HH:mm", Locale.KOREAN).format(Date())
-            var prompt = template.replace("{text}", sttText.take(500000)).replace("{dt}", dt)
-            if (customInstruction.isNotBlank()) {
-                prompt += "\n\n[추가 지시사항]\n${customInstruction.trim()}"
-            }
-            onProgress?.invoke(30)
-
-            val response = model.generateContent(prompt)
-            val result = response.text ?: return ServiceResult(false, "요약 응답이 비어 있습니다.")
-            onProgress?.invoke(100)
-            ServiceResult(true, trimSummary(result))
-        } catch (e: Exception) {
-            ServiceResult(false, friendlyError(e.message ?: ""))
-        }
-    }
-
-    suspend fun extractKeyMetrics(summaryText: String, apiKey: String): ServiceResult {
-        if (apiKey.isBlank()) return ServiceResult(false, "Gemini API 키가 없습니다.")
-        if (summaryText.isBlank()) return ServiceResult(false, "요약 텍스트가 비어 있습니다.")
-
-        val prompt = """다음 회의록 요약에서 핵심 정보를 추출해주세요.
-
-[요약 텍스트]
-${summaryText.take(100000)}
-
-[출력 형식]
-📋 결정사항
-- (결정된 사항 나열, 없으면 "없음")
-
-✅ 액션 아이템
-- 담당자: X | 업무: Y | 기한: Z (없으면 "없음")
-
-📅 주요 일정
-- (날짜/기한 포함 일정, 없으면 "없음")
-
-🔢 핵심 수치
-- (금액, 기간, 비율 등 주요 숫자, 없으면 "없음")
-
-🏷️ 키워드
-- (3~7개, 쉼표로 구분)"""
-
-        return try {
-            val model = GenerativeModel(
-                modelName = SUMMARY_MODEL,
-                apiKey = apiKey,
-                generationConfig = generationConfig {
-                    temperature = 0.2f
-                    maxOutputTokens = 4096
-                }
-            )
-            val response = model.generateContent(prompt)
-            ServiceResult(true, response.text ?: "핵심 지표 응답이 비어 있습니다.")
-        } catch (e: Exception) {
-            ServiceResult(false, friendlyError(e.message ?: ""))
-        }
-    }
-
-    private fun makeSttPrompt(numSpeakers: Int): String {
-        val rule = when {
-            numSpeakers == 1 -> "- 화자가 1명이므로 화자 구분 없이 전사\n"
-            numSpeakers >= 2 -> "- 화자가 ${numSpeakers}명입니다. [화자1], [화자2]${if (numSpeakers >= 3) ", [화자3]" else ""} 형식으로 구분\n"
-            else -> "- 여러 화자는 [화자1], [화자2] 형식으로 구분\n"
-        }
-        return """이 오디오 파일을 한국어 텍스트로 정확히 전사해주세요.
-
-규칙:
-${rule}- 불명확한 부분은 [불명확] 표시
-- 의미 없는 짧은 반복(어, 음 등)은 생략
-- 전사 결과만 출력하고 설명 없이 바로 시작"""
-    }
-
-    private fun getTemplate(mode: String): String = when (mode) {
-        "topic" -> SUMMARY_TOPIC
-        "formal_md" -> SUMMARY_FORMAL_MD
-        "formal_text" -> SUMMARY_FORMAL_TEXT
-        "lecture_md" -> SUMMARY_LECTURE_MD
-        else -> SUMMARY_SPEAKER
-    }
-
-    private fun trimSummary(text: String): String {
-        val marker = "회의녹음요약 앱 자동 생성"
-        val idx = text.indexOf(marker)
-        return if (idx != -1) text.substring(0, idx + marker.length).trim() else text.trim()
-    }
-
-    private fun friendlyError(msg: String): String = when {
-        "UNAUTHENTICATED" in msg || "no credentials" in msg.lowercase() ->
-            "Gemini API 키가 설정되지 않았습니다. 설정에서 입력해주세요."
-        "API_KEY_INVALID" in msg -> "API 키가 올바르지 않습니다."
-        "PERMISSION_DENIED" in msg || "403" in msg -> "API 키 권한이 없습니다."
-        "429" in msg || "RESOURCE_EXHAUSTED" in msg -> "API 요청 한도 초과입니다. 잠시 후 다시 시도해주세요."
-        "timeout" in msg.lowercase() -> "처리 시간이 초과되었습니다."
-        else -> "Gemini 오류: ${msg.take(300)}"
-    }
-
-    // ── Templates (same as original Python) ──
     companion object {
+        private val MODEL_CANDIDATES = listOf(
+            "gemini-2.5-flash",
+            "gemini-2.0-flash",
+            "gemini-1.5-flash",
+            "gemini-pro"
+        )
+        const val STT_MODEL = "gemini-2.5-flash"
+        const val SUMMARY_MODEL = "gemini-2.5-flash"
+        private const val BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
+
         val SUMMARY_SPEAKER = """당신은 전문 회의록 작성 전문가입니다.
 다음 회의 전사 내용을 바탕으로 화자(참석자) 중심의 한국어 회의록을 작성해주세요.
 
@@ -316,5 +153,269 @@ ${rule}- 불명확한 부분은 [불명확] 표시
 
 ---
 강의녹음요약 앱 자동 생성"""
+    }
+
+    // ── REST API 직접 호출 ──────────────────────────────────────
+
+    private fun callGeminiApi(
+        model: String,
+        apiKey: String,
+        contents: JsonArray,
+        temperature: Float = 0.3f,
+        maxOutputTokens: Int = 65536
+    ): ServiceResult {
+        val trimmedKey = apiKey.trim()
+        val url = "$BASE_URL/$model:generateContent"
+
+        val bodyJson = JsonObject().apply {
+            add("contents", contents)
+            add("generationConfig", JsonObject().apply {
+                addProperty("temperature", temperature)
+                addProperty("maxOutputTokens", maxOutputTokens)
+            })
+        }
+
+        return try {
+            val request = Request.Builder()
+                .url(url)
+                .addHeader("Content-Type", "application/json")
+                .addHeader("x-goog-api-key", trimmedKey)
+                .post(gson.toJson(bodyJson).toRequestBody("application/json".toMediaType()))
+                .build()
+
+            val response = client.newCall(request).execute()
+            val respBody = response.body?.string() ?: ""
+
+            if (!response.isSuccessful) {
+                return ServiceResult(false, friendlyError(respBody))
+            }
+
+            val json = gson.fromJson(respBody, JsonObject::class.java)
+                ?: return ServiceResult(false, "응답 파싱 실패: 빈 응답")
+            val candidates = json.getAsJsonArray("candidates")
+            if (candidates == null || candidates.size() == 0) {
+                // 차단된 응답인지 확인
+                val blockReason = json.getAsJsonObject("promptFeedback")
+                    ?.get("blockReason")?.asString
+                if (blockReason != null) {
+                    return ServiceResult(false, "Gemini 응답 차단: $blockReason")
+                }
+                return ServiceResult(false, "Gemini 응답이 비어 있습니다. 응답: ${respBody.take(200)}")
+            }
+            val content = candidates[0]?.asJsonObject?.getAsJsonObject("content")
+                ?: return ServiceResult(false, "응답 콘텐츠가 비어 있습니다.")
+            val parts = content.getAsJsonArray("parts")
+            if (parts == null || parts.size() == 0) {
+                return ServiceResult(false, "응답 파트가 비어 있습니다.")
+            }
+            val text = parts[0]?.asJsonObject?.get("text")?.asString
+                ?: return ServiceResult(false, "응답 텍스트가 비어 있습니다.")
+            ServiceResult(true, text)
+        } catch (e: Exception) {
+            ServiceResult(false, "연결 오류: ${e.message?.take(200)}")
+        }
+    }
+
+    private fun makeTextContents(prompt: String): JsonArray {
+        return JsonArray().apply {
+            add(JsonObject().apply {
+                addProperty("role", "user")
+                add("parts", JsonArray().apply {
+                    add(JsonObject().apply {
+                        addProperty("text", prompt)
+                    })
+                })
+            })
+        }
+    }
+
+    // ── 공개 API ────────────────────────────────────────────────
+
+    fun testConnection(apiKey: String): ServiceResult {
+        if (apiKey.isBlank()) return ServiceResult(false, "API 키가 비어 있습니다. 키를 입력하고 '저장'을 먼저 눌러주세요.")
+
+        val contents = makeTextContents("안녕하세요. 테스트입니다. 한 문장으로 답해주세요.")
+
+        // 여러 모델을 순서대로 시도하여 사용 가능한 모델 자동 감지
+        for (model in MODEL_CANDIDATES) {
+            val result = callGeminiApi(model, apiKey, contents, maxOutputTokens = 30)
+            if (result.success) {
+                activeModel = model  // 성공한 모델 저장
+                return ServiceResult(true, "✅ 연결 성공! ($model 사용 가능)")
+            }
+        }
+
+        // 모든 모델 실패
+        return ServiceResult(false, "❌ 사용 가능한 Gemini 모델을 찾지 못했습니다.\n\n" +
+                "시도한 모델: ${MODEL_CANDIDATES.joinToString(", ")}\n\n" +
+                "API 키: ${apiKey.trim().take(8)}...${apiKey.trim().takeLast(4)}\n\n" +
+                "Google AI Studio(aistudio.google.com)에서 키를 확인해주세요.")
+    }
+
+    fun transcribe(
+        audioFile: File,
+        apiKey: String,
+        numSpeakers: Int = 0,
+        onProgress: ((Int) -> Unit)? = null,
+        onStatus: ((String) -> Unit)? = null
+    ): ServiceResult {
+        if (apiKey.isBlank()) return ServiceResult(false, "Gemini API 키가 없습니다. 설정에서 입력해주세요.")
+        if (!audioFile.exists()) return ServiceResult(false, "파일을 찾을 수 없습니다: ${audioFile.name}")
+
+        val sizeMb = audioFile.length() / (1024.0 * 1024.0)
+        if (sizeMb > 50) {
+            return ServiceResult(false, "파일 크기(${String.format("%.1f", sizeMb)}MB)가 Gemini STT 최대 50MB를 초과합니다.\nCLOVA Speech(최대 200MB)를 사용해주세요.")
+        }
+        val sttPrompt = makeSttPrompt(numSpeakers)
+
+        onProgress?.invoke(5)
+        onStatus?.invoke("STT 변환 준비 중... (${String.format("%.1f", sizeMb)}MB)")
+
+        // 오디오 파일을 Base64로 인코딩
+        val audioBytes = try {
+            audioFile.readBytes()
+        } catch (e: OutOfMemoryError) {
+            return ServiceResult(false, "메모리 부족: 파일이 너무 큽니다(${String.format("%.1f", sizeMb)}MB).\nCLOVA Speech를 사용해주세요.")
+        }
+        val audioBase64 = Base64.encodeToString(audioBytes, Base64.NO_WRAP)
+        val mimeType = when (audioFile.extension.lowercase()) {
+            "mp3" -> "audio/mp3"
+            "wav" -> "audio/wav"
+            "m4a" -> "audio/mp4"
+            "ogg" -> "audio/ogg"
+            "flac" -> "audio/flac"
+            else -> "audio/mp4"
+        }
+
+        onStatus?.invoke("Gemini STT 변환 중... (1~10분 소요)")
+        onProgress?.invoke(30)
+
+        // 오디오 + 텍스트 프롬프트 구성
+        val contents = JsonArray().apply {
+            add(JsonObject().apply {
+                addProperty("role", "user")
+                add("parts", JsonArray().apply {
+                    add(JsonObject().apply {
+                        addProperty("text", sttPrompt)
+                    })
+                    add(JsonObject().apply {
+                        add("inline_data", JsonObject().apply {
+                            addProperty("mime_type", mimeType)
+                            addProperty("data", audioBase64)
+                        })
+                    })
+                })
+            })
+        }
+
+        onProgress?.invoke(40)
+
+        val result = callGeminiApi(activeModel, apiKey, contents, temperature = 0.1f)
+
+        if (result.success) {
+            onProgress?.invoke(100)
+            onStatus?.invoke("✅ Gemini STT 변환 완료")
+        }
+
+        return result
+    }
+
+    fun summarize(
+        sttText: String,
+        apiKey: String,
+        summaryMode: String = "speaker",
+        customInstruction: String = "",
+        onProgress: ((Int) -> Unit)? = null
+    ): ServiceResult {
+        if (apiKey.isBlank()) return ServiceResult(false, "Gemini API 키가 없습니다.")
+        if (sttText.isBlank()) return ServiceResult(false, "변환된 텍스트가 비어 있습니다.")
+
+        val template = getTemplate(summaryMode)
+        onProgress?.invoke(10)
+
+        val dt = SimpleDateFormat("yyyy년 MM월 dd일 HH:mm", Locale.KOREAN).format(Date())
+        var prompt = template.replace("{text}", sttText.take(500000)).replace("{dt}", dt)
+        if (customInstruction.isNotBlank()) {
+            prompt += "\n\n[추가 지시사항]\n${customInstruction.trim()}"
+        }
+        onProgress?.invoke(30)
+
+        val contents = makeTextContents(prompt)
+        val result = callGeminiApi(activeModel, apiKey, contents, temperature = 0.3f)
+
+        if (result.success) {
+            onProgress?.invoke(100)
+            return ServiceResult(true, trimSummary(result.text))
+        }
+        return result
+    }
+
+    fun extractKeyMetrics(summaryText: String, apiKey: String): ServiceResult {
+        if (apiKey.isBlank()) return ServiceResult(false, "Gemini API 키가 없습니다.")
+        if (summaryText.isBlank()) return ServiceResult(false, "요약 텍스트가 비어 있습니다.")
+
+        val prompt = """다음 회의록 요약에서 핵심 정보를 추출해주세요.
+
+[요약 텍스트]
+${summaryText.take(100000)}
+
+[출력 형식]
+📋 결정사항
+- (결정된 사항 나열, 없으면 "없음")
+
+✅ 액션 아이템
+- 담당자: X | 업무: Y | 기한: Z (없으면 "없음")
+
+📅 주요 일정
+- (날짜/기한 포함 일정, 없으면 "없음")
+
+🔢 핵심 수치
+- (금액, 기간, 비율 등 주요 숫자, 없으면 "없음")
+
+🏷️ 키워드
+- (3~7개, 쉼표로 구분)"""
+
+        val contents = makeTextContents(prompt)
+        return callGeminiApi(activeModel, apiKey, contents, temperature = 0.2f, maxOutputTokens = 4096)
+    }
+
+    // ── 유틸리티 ────────────────────────────────────────────────
+
+    private fun makeSttPrompt(numSpeakers: Int): String {
+        val rule = when {
+            numSpeakers == 1 -> "- 화자가 1명이므로 화자 구분 없이 전사\n"
+            numSpeakers >= 2 -> "- 화자가 ${numSpeakers}명입니다. [화자1], [화자2]${if (numSpeakers >= 3) ", [화자3]" else ""} 형식으로 구분\n"
+            else -> "- 여러 화자는 [화자1], [화자2] 형식으로 구분\n"
+        }
+        return """이 오디오 파일을 한국어 텍스트로 정확히 전사해주세요.
+
+규칙:
+${rule}- 불명확한 부분은 [불명확] 표시
+- 의미 없는 짧은 반복(어, 음 등)은 생략
+- 전사 결과만 출력하고 설명 없이 바로 시작"""
+    }
+
+    private fun getTemplate(mode: String): String = when (mode) {
+        "topic" -> SUMMARY_TOPIC
+        "formal_md" -> SUMMARY_FORMAL_MD
+        "formal_text" -> SUMMARY_FORMAL_TEXT
+        "lecture_md" -> SUMMARY_LECTURE_MD
+        else -> SUMMARY_SPEAKER
+    }
+
+    private fun trimSummary(text: String): String {
+        val marker = "회의녹음요약 앱 자동 생성"
+        val idx = text.indexOf(marker)
+        return if (idx != -1) text.substring(0, idx + marker.length).trim() else text.trim()
+    }
+
+    private fun friendlyError(msg: String): String = when {
+        "API_KEY_INVALID" in msg || "API key not valid" in msg -> "API 키가 올바르지 않습니다. 키를 다시 확인해주세요."
+        "UNAUTHENTICATED" in msg || "401" in msg -> "API 인증 실패입니다. 키를 다시 확인해주세요."
+        "PERMISSION_DENIED" in msg || "403" in msg -> "API 키 권한이 없습니다. Google AI Studio에서 확인해주세요."
+        "NOT_FOUND" in msg || "404" in msg -> "모델을 찾을 수 없습니다. 잠시 후 다시 시도해주세요."
+        "429" in msg || "RESOURCE_EXHAUSTED" in msg -> "API 요청 한도 초과입니다. 잠시 후 다시 시도해주세요."
+        "timeout" in msg.lowercase() -> "처리 시간이 초과되었습니다."
+        else -> "Gemini 오류: ${msg.take(300)}"
     }
 }

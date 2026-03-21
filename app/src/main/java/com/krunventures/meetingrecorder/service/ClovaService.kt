@@ -101,12 +101,21 @@ class ClovaService {
             val response = client.newCall(request).execute()
             onProgress?.invoke(80)
 
+            // response body는 한 번만 읽을 수 있음 — 변수에 저장
+            val responseBody = response.body?.string() ?: ""
+
             if (response.code != 200) {
-                val body = response.body?.string() ?: ""
-                return TranscribeResult(false, "API 오류 (HTTP ${response.code}): ${body.take(200)}")
+                return TranscribeResult(false, "API 오류 (HTTP ${response.code}): ${responseBody.take(200)}")
             }
 
-            val data = gson.fromJson(response.body?.string(), JsonObject::class.java)
+            val data = try {
+                gson.fromJson(responseBody, JsonObject::class.java)
+            } catch (e: Exception) {
+                return TranscribeResult(false, "CLOVA 응답 파싱 오류: ${e.message?.take(100)}")
+            }
+            if (data == null) {
+                return TranscribeResult(false, "CLOVA 응답을 파싱할 수 없습니다.")
+            }
             onProgress?.invoke(90)
             onStatus?.invoke("결과 정리 중...")
 
@@ -130,24 +139,30 @@ class ClovaService {
         val currentTexts = mutableListOf<String>()
 
         for (seg in segments) {
-            val obj = seg.asJsonObject
-            val text = obj.get("text")?.asString?.trim() ?: continue
-            if (text.isEmpty()) continue
+            try {
+                if (seg == null || seg.isJsonNull || !seg.isJsonObject) continue
+                val obj = seg.asJsonObject
+                val text = obj.get("text")?.asString?.trim() ?: continue
+                if (text.isEmpty()) continue
 
-            val diar = obj.getAsJsonObject("diarization")
-            val label = diar?.get("label")?.asString ?: ""
-            val speaker = if (label.isNotEmpty()) "[화자$label]" else ""
+                val diar = try { obj.getAsJsonObject("diarization") } catch (_: Exception) { null }
+                val label = diar?.get("label")?.asString ?: ""
+                val speaker = if (label.isNotEmpty()) "[화자$label]" else ""
 
-            if (speaker != currentSpeaker) {
-                if (currentSpeaker != null && currentTexts.isNotEmpty()) {
-                    val block = currentTexts.joinToString("")
-                    lines.add(if (currentSpeaker!!.isNotEmpty()) "$currentSpeaker $block" else block)
+                if (speaker != currentSpeaker) {
+                    if (currentSpeaker != null && currentTexts.isNotEmpty()) {
+                        val block = currentTexts.joinToString("")
+                        lines.add(if (currentSpeaker!!.isNotEmpty()) "$currentSpeaker $block" else block)
+                    }
+                    currentSpeaker = speaker
+                    currentTexts.clear()
+                    currentTexts.add(text)
+                } else {
+                    currentTexts.add(" $text")
                 }
-                currentSpeaker = speaker
-                currentTexts.clear()
-                currentTexts.add(text)
-            } else {
-                currentTexts.add(" $text")
+            } catch (e: Exception) {
+                // 개별 세그먼트 파싱 실패 시 다음으로 진행
+                continue
             }
         }
         if (currentTexts.isNotEmpty()) {

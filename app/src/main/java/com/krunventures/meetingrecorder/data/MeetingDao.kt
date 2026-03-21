@@ -22,4 +22,10 @@ interface MeetingDao {
 
     @Query("DELETE FROM meetings WHERE id = :id")
     suspend fun delete(id: Int)
+
+    @Query("UPDATE meetings SET fileName = :newName WHERE id = :id")
+    suspend fun updateFileName(id: Int, newName: String)
+
+    @Query("UPDATE meetings SET mp3LocalPath = :mp3Path, sttLocalPath = :sttPath, summaryLocalPath = :summaryPath WHERE id = :id")
+    suspend fun updateFilePaths(id: Int, mp3Path: String, sttPath: String, summaryPath: String)
 }
