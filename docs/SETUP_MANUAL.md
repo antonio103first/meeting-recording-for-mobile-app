@@ -23,12 +23,34 @@
 
 ---
 
-## 2. 소스코드 다운로드
+## 2. GitHub 리포지토리 설정 및 소스코드 다운로드
+
+### 2-1. 리포지토리가 이미 존재하는 경우
 
 ```bash
 git clone https://github.com/antonio103first/meeting-recording-mobile-app.git
 cd meeting-recording-mobile-app
 ```
+
+### 2-2. 리포지토리를 새로 생성해야 하는 경우
+
+> ⚠ GitHub 계정을 변경했거나 리포지토리가 삭제된 경우, 먼저 GitHub에서 리포지토리를 생성해야 합니다.
+
+1. https://github.com/new 접속 (antonio103first 계정으로 로그인)
+2. **Repository name**: `meeting-recording-mobile-app`
+3. **Visibility**: Private 또는 Public 선택
+4. **README, .gitignore, license**: 모두 체크 해제 (빈 리포지토리로 생성)
+5. **"Create repository"** 클릭
+
+로컬에 소스가 있는 경우 아래 명령으로 연결 및 푸시:
+
+```bash
+cd meeting-recording-mobile-app
+git remote add origin https://github.com/antonio103first/meeting-recording-mobile-app.git
+git push -u origin main
+```
+
+> 💡 `remote: Repository not found` 오류가 발생하면 GitHub에 리포지토리가 아직 생성되지 않은 것입니다. 위 절차로 먼저 생성하세요.
 
 ---
 
