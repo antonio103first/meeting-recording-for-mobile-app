@@ -1,7 +1,7 @@
-# 🎙 회의녹음요약 (모바일)
+# 회의녹음요약 (모바일)
 
 회의·강의 음성을 녹음하거나 오디오 파일을 불러와
-**STT 변환 → 회의록/강의 요약 → 핸드폰 저장 → Google Drive 자동 업로드**
+**STT 변환 → AI 회의록 요약 → 핸드폰 저장 → Google Drive 자동 업로드**
 까지 한 번에 처리하는 Android 모바일 앱입니다.
 
 > **데스크톱 버전**: [meeting-recording-minute-app](https://github.com/antonio103first/meeting-recording-minute-app)
@@ -12,21 +12,31 @@
 
 | 기능 | 설명 |
 |------|------|
-| 🎙 실시간 녹음 | 마이크 녹음 → M4A 자동 저장 (백그라운드 녹음 지원) |
-| 📂 파일 불러오기 | MP3/WAV/M4A 등 기존 오디오 파일 선택 |
-| 📝 STT 변환 | CLOVA Speech(NAVER) 또는 Gemini(Google) |
-| 📋 회의록 요약 | Gemini 또는 Claude로 5가지 요약 방식 지원 |
-| 📊 핵심 지표 | 결정사항, 액션아이템, 주요 일정 자동 추출 |
-| ☁ Google Drive | 녹음·요약 각각 지정 폴더에 자동 업로드 |
-| 📱 홈 위젯 | 원터치 녹음 시작 위젯 |
-| 🌙 다크모드 | 시스템 설정 연동 자동 전환 |
+| 실시간 녹음 | Foreground Service 기반 백그라운드 녹음 (M4A 자동 저장) |
+| 파일 불러오기 | MP3/WAV/M4A 등 기존 오디오 파일 선택 |
+| STT 변환 | CLOVA Speech(NAVER) — 한국어 특화, 화자 분리 지원 |
+| AI 회의록 요약 | Gemini / Claude 선택, 5가지 요약 방식 |
+| 핵심 지표 | 결정사항, 액션아이템, 주요 일정 자동 추출 |
+| Google Drive | 녹음파일·회의록 각각 지정 폴더에 자동 업로드 (하위폴더 탐색 지원) |
+| 파일 관리 | 삭제, 이름변경, 공유, 파일만삭제 (DB 유지) |
+| 통화 감지 | 녹음 중 통화 수신 시 자동 일시정지, 통화 종료 후 자동 재개 |
+| 텍스트 복사 | STT/요약/지표 텍스트 영역 선택 복사 |
+| 파일이름 지정 | 저장 전 파일이름 입력 다이얼로그 |
+| 홈 위젯 | 원터치 녹음 시작 위젯 |
+| 다크모드 | 시스템 설정 연동 자동 전환 |
 
 ### STT 엔진
 
 | 엔진 | 특징 | 권장 상황 |
 |------|------|-----------|
-| **CLOVA Speech** ★권장★ | 한국어 특화, 화자 분리 지원 | 긴 회의 (30분 이상) |
-| **Gemini** | 무료 API, 설정 간편 | 짧은 녹음 (5분 이내) |
+| **CLOVA Speech** (권장) | 한국어 특화, 화자 분리 지원 | 긴 회의 (30분 이상) |
+
+### 요약 엔진
+
+| 엔진 | 특징 |
+|------|------|
+| **Gemini** (권장) | 모델 자동 감지 (2.5-flash → 2.0-flash → 1.5-flash → pro) |
+| **Claude** (선택) | Anthropic API |
 
 ### 요약 방식
 
@@ -38,24 +48,10 @@
 
 ---
 
-## 저장 경로
-
-```
-내장 저장소/Documents/Meeting recording/
-├── 녹음파일/              ← M4A 녹음 파일
-│   ├── 20260319_143000_녹음.m4a
-│   └── 회의록(요약)/      ← STT + 요약 텍스트
-│       ├── 20260319_143000_녹음.txt
-│       └── 20260319_143000_요약.txt
-```
-
----
-
 ## 시스템 요구사항
 
 - **디바이스**: Samsung Galaxy S25 (또는 Android 8.0+ 기기)
-- **OS**: Android 8.0 (API 26) 이상
-- **권장**: Android 14+ (API 34)
+- **OS**: Android 8.0 (API 26) 이상, 권장 Android 14+ (API 34)
 - **인터넷 연결 필수**
 
 ---
@@ -63,8 +59,9 @@
 ## 빌드 및 설치
 
 ### 사전 준비
-- [Android Studio](https://developer.android.com/studio) Hedgehog 2023.1 이상
-- JDK 17
+
+- [Android Studio](https://developer.android.com/studio) (최신 버전)
+- JDK 17 (Android Studio 내장 JBR 사용)
 
 ### 빌드
 
@@ -74,31 +71,47 @@ cd meeting-recording-mobile-app
 ```
 
 1. Android Studio에서 프로젝트 열기
-2. Gradle Sync 완료 대기
-3. Galaxy S25 USB 디버깅 연결
-4. ▶ Run 버튼 클릭
+2. `app/google-services.json` 배치 (Firebase Console에서 다운로드 — 자세한 내용은 `docs/SETUP_MANUAL.md` 참조)
+3. Gradle Sync 완료 대기 (**AGP/Kotlin 자동 업그레이드 제안 거부**)
+4. Build → Rebuild Project
+5. Galaxy S25 USB 디버깅 연결 → Run
+
+> 상세 빌드/설치 절차는 [docs/SETUP_MANUAL.md](docs/SETUP_MANUAL.md) 참조
 
 ---
 
-## 초기 설정
+## 초기 설정 (앱 내 설정 탭)
 
-### Step 1. Gemini API 키 (필수)
-1. [aistudio.google.com/apikey](https://aistudio.google.com/apikey) 접속
-2. **Create API Key** 클릭
-3. 앱 설정 탭에 입력
+### 1. 엔진 설정 (설정 메뉴 최상단)
 
-### Step 2. CLOVA Speech API (STT 권장)
-1. [console.ncloud.com](https://console.ncloud.com) → CLOVA Speech
-2. Invoke URL + Secret Key 발급
-3. 앱 설정 탭에 입력
+STT 엔진과 요약 엔진을 선택합니다.
 
-### Step 3. Claude API (선택)
-1. [console.anthropic.com](https://console.anthropic.com) → API Keys
-2. 앱 설정 탭에 입력
+### 2. API 키 입력
 
-### Step 4. Google Drive (선택)
-1. 앱 설정 탭에서 Google 로그인
-2. 업로드 폴더 자동 생성
+| API | 발급처 |
+|-----|--------|
+| CLOVA Speech Invoke URL + Secret Key | [console.ncloud.com](https://console.ncloud.com) → CLOVA Speech |
+| Gemini API Key | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
+| Claude API Key (선택) | [console.anthropic.com](https://console.anthropic.com) |
+
+### 3. Google Drive 연동
+
+설정 탭 → Google Drive 연결 → Google 계정 로그인 → 업로드 폴더 선택
+
+---
+
+## 빌드 환경 (버전 변경 금지)
+
+| 항목 | 버전 |
+|------|------|
+| AGP (Android Gradle Plugin) | 8.7.3 |
+| Kotlin | 2.0.21 |
+| KSP | 2.0.21-1.0.28 |
+| Gradle | 8.9 |
+| compileSdk / targetSdk | 35 |
+| minSdk | 26 |
+| Compose BOM | 2024.12.01 |
+| google-services plugin | 4.4.0 |
 
 ---
 
@@ -106,15 +119,15 @@ cd meeting-recording-mobile-app
 
 | 항목 | 기술 |
 |------|------|
-| 언어 | Kotlin 1.9 |
+| 언어 | Kotlin 2.0.21 |
 | UI | Jetpack Compose + Material3 |
-| 녹음 | Android MediaRecorder (AAC) |
-| DB | Room (SQLite ORM) |
-| HTTP | OkHttp3 |
-| AI | Google Generative AI SDK, Anthropic API |
-| STT | CLOVA Speech Long API, Gemini |
-| Drive | Google Sign-In + Drive API v3 |
-| 비동기 | Kotlin Coroutines + StateFlow |
+| 녹음 | Android MediaRecorder (AAC) + Foreground Service |
+| DB | Room 2.6.1 (SQLite ORM) |
+| HTTP | OkHttp 4.12.0 |
+| AI 요약 | Gemini REST API (OkHttp 직접 호출), Anthropic Claude API |
+| STT | CLOVA Speech Long API |
+| Drive | Google Sign-In 21.0.0 + Drive API v3 |
+| 비동기 | Kotlin Coroutines 1.8.1 + StateFlow |
 
 ---
 
@@ -122,49 +135,41 @@ cd meeting-recording-mobile-app
 
 ```
 app/src/main/java/com/krunventures/meetingrecorder/
-├── MainActivity.kt              # 메인 (3탭 네비게이션)
-├── MeetingApp.kt                # Application
+├── MeetingApp.kt                  # Application (글로벌 크래시 핸들러)
+├── MainActivity.kt                # Compose NavHost (3탭 네비게이션)
 ├── data/
-│   ├── Meeting.kt               # Room Entity
-│   ├── MeetingDao.kt            # Room DAO
-│   ├── AppDatabase.kt           # Room Database
-│   └── ConfigManager.kt         # 설정 관리
+│   ├── ConfigManager.kt           # SharedPreferences 설정 관리
+│   ├── MeetingDao.kt              # Room DAO
+│   └── MeetingDatabase.kt         # Room Database
 ├── service/
-│   ├── AudioRecorderManager.kt  # 녹음
-│   ├── ClovaService.kt          # CLOVA STT
-│   ├── GeminiService.kt         # Gemini STT + 요약
-│   ├── ClaudeService.kt         # Claude 요약
-│   ├── GoogleDriveService.kt    # Drive 연동
-│   ├── FileManager.kt           # 파일 관리
-│   └── RecordingService.kt      # 포그라운드 서비스
-├── ui/
-│   ├── theme/Theme.kt           # 테마 (다크모드)
-│   └── screens/
-│       ├── RecordingScreen.kt   # 녹음/변환
-│       ├── MeetingListScreen.kt # 회의목록
-│       └── SettingsScreen.kt    # 설정
+│   ├── ClovaService.kt            # CLOVA Speech STT
+│   ├── GeminiService.kt           # Gemini REST API (OkHttp 직접 호출, 모델 자동감지)
+│   ├── ClaudeService.kt           # Claude API
+│   ├── GoogleDriveService.kt      # Drive 업로드/폴더 관리
+│   ├── FileManager.kt             # 파일 저장/변환/통합저장
+│   ├── RecordingService.kt        # Foreground Service 녹음
+│   └── CallManager.kt             # 통화 감지 자동 일시정지/재개
 ├── viewmodel/
-│   ├── RecordingViewModel.kt
-│   ├── MeetingListViewModel.kt
-│   └── SettingsViewModel.kt
+│   ├── RecordingViewModel.kt      # 녹음→STT→요약 파이프라인
+│   ├── SettingsViewModel.kt       # 설정 + Drive 연동 + 하위폴더 탐색
+│   └── MeetingListViewModel.kt    # 회의목록 + 파일관리
+├── ui/screens/
+│   ├── RecordingScreen.kt         # 녹음/변환 화면
+│   ├── SettingsScreen.kt          # 설정 화면 (엔진설정 상단 배치)
+│   └── MeetingListScreen.kt       # 회의목록 + 파일관리 화면
 └── widget/
-    └── RecordingWidget.kt       # 홈 위젯
+    └── RecordingWidget.kt         # 홈스크린 위젯
 ```
 
 ---
 
-## 의존성
+## 문서
 
-```
-Jetpack Compose BOM 2024.01
-Room 2.6.1
-OkHttp 4.12.0
-Google Generative AI 0.9.0
-Google Drive API v3
-Google Sign-In 21.0.0
-Gson 2.10.1
-Kotlin Coroutines 1.7.3
-```
+| 문서 | 설명 |
+|------|------|
+| [docs/SETUP_MANUAL.md](docs/SETUP_MANUAL.md) | PC 포맷 후 재설치 매뉴얼 (v2.0) |
+| [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md) | 개발 기획서 |
+| [docs/DEVELOPMENT_HISTORY.md](docs/DEVELOPMENT_HISTORY.md) | 개발 히스토리 (Phase 1~7, 9차 수정) |
 
 ---
 
@@ -172,6 +177,7 @@ Kotlin Coroutines 1.7.3
 
 | 버전 | 날짜 | 주요 변경 |
 |------|------|-----------|
+| v2.0.0 | 2026-03-22 | 크래시 수정 18건, Gemini OkHttp 전환, Drive 자동 업로드, 하위폴더 탐색, 파일관리, 통화 감지, 커스텀 아이콘, 문서화 |
 | v1.0.0 | 2026-03-19 | 모바일 버전 최초 릴리스 (데스크톱 v2.0 기반 전환) |
 
 ---
