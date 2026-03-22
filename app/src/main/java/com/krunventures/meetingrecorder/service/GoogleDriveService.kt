@@ -128,6 +128,7 @@ class GoogleDriveService(private val context: Context) {
                     "mp3" -> "audio/mpeg"
                     "m4a" -> "audio/mp4"
                     "wav" -> "audio/wav"
+                    "md" -> "text/markdown"
                     "txt" -> "text/plain"
                     else -> "application/octet-stream"
                 }

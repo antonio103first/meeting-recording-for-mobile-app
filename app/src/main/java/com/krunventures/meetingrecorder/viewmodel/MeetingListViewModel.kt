@@ -142,7 +142,7 @@ class MeetingListViewModel(app: Application) : AndroidViewModel(app) {
                 // 녹음 파일 이름 변경
                 val newMp3Path = renameFileIfExists(meeting.mp3LocalPath, fullNewName)
                 // 회의록 파일 이름 변경
-                val sttName = newName + "_회의록.txt"
+                val sttName = newName + "_회의록.md"
                 val newSttPath = renameFileIfExists(meeting.sttLocalPath, sttName)
                 val newSummaryPath = if (meeting.summaryLocalPath == meeting.sttLocalPath) {
                     newSttPath
@@ -222,7 +222,11 @@ class MeetingListViewModel(app: Application) : AndroidViewModel(app) {
 
             val intent = if (uris.size == 1) {
                 Intent(Intent.ACTION_SEND).apply {
-                    type = if (filesToShare[0].extension == "txt") "text/plain" else "audio/*"
+                    type = when (filesToShare[0].extension.lowercase()) {
+                        "md" -> "text/markdown"
+                        "txt" -> "text/plain"
+                        else -> "audio/*"
+                    }
                     putExtra(Intent.EXTRA_STREAM, uris[0])
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

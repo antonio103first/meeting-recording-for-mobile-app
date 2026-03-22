@@ -22,7 +22,7 @@ class FileManager {
     fun saveSummaryText(text: String, saveDir: File, fileName: String): Result<File> {
         return try {
             saveDir.mkdirs()
-            val file = File(saveDir, "${fileName}.txt")
+            val file = File(saveDir, "${fileName}.md")
             file.writeText(text, Charsets.UTF_8)
             Result.success(file)
         } catch (e: Exception) {
@@ -38,20 +38,17 @@ class FileManager {
         return try {
             saveDir.mkdirs()
             val combined = buildString {
-                appendLine("=" .repeat(60))
-                appendLine("【 회의록 요약 】")
-                appendLine("=".repeat(60))
+                appendLine("# 회의록 요약")
                 appendLine()
                 appendLine(summaryText.trim())
                 appendLine()
+                appendLine("---")
                 appendLine()
-                appendLine("=".repeat(60))
-                appendLine("【 STT 변환 원문 】")
-                appendLine("=".repeat(60))
+                appendLine("# STT 변환 원문")
                 appendLine()
                 appendLine(sttText.trim())
             }
-            val file = File(saveDir, "${fileName}.txt")
+            val file = File(saveDir, "${fileName}.md")
             file.writeText(combined, Charsets.UTF_8)
             Result.success(file)
         } catch (e: Exception) {
@@ -84,8 +81,9 @@ class FileManager {
 
     fun listSummaryFiles(summaryDir: File): List<File> {
         if (!summaryDir.exists()) return emptyList()
+        val extensions = setOf("md", "txt")
         return summaryDir.walkTopDown()
-            .filter { it.isFile && it.extension.lowercase() == "txt" }
+            .filter { it.isFile && it.extension.lowercase() in extensions }
             .sortedByDescending { it.lastModified() }
             .toList()
     }

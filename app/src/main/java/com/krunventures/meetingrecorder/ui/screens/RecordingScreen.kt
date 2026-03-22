@@ -1,6 +1,7 @@
 package com.krunventures.meetingrecorder.ui.screens
 
 import android.net.Uri
+import android.webkit.WebView
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -14,7 +15,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -29,8 +29,12 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.krunventures.meetingrecorder.service.CallState
 import com.krunventures.meetingrecorder.service.RecordingState
 import com.krunventures.meetingrecorder.ui.theme.*
@@ -42,6 +46,11 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
     val state by viewModel.uiState.collectAsState()
     val scrollState = rememberScrollState()
     val haptic = LocalHapticFeedback.current
+
+    // 전체보기 다이얼로그 상태
+    var fullScreenTitle by remember { mutableStateOf("") }
+    var fullScreenText by remember { mutableStateOf("") }
+    var showFullScreen by remember { mutableStateOf(false) }
 
     val filePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
@@ -69,6 +78,15 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
         ),
         label = "alpha"
     )
+
+    // 전체보기 다이얼로그 — 독립 스크롤 + 부분 선택 복사
+    if (showFullScreen) {
+        FullScreenTextDialog(
+            title = fullScreenTitle,
+            text = fullScreenText,
+            onDismiss = { showFullScreen = false }
+        )
+    }
 
     // Error dialog
     state.error?.let { error ->
@@ -134,7 +152,7 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
                         }
                     }
 
-                    Divider(modifier = Modifier.padding(vertical = 10.dp),
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp),
                         color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
 
                     // Elapsed time - large display
@@ -310,7 +328,7 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
                 Column(modifier = Modifier.padding(20.dp)) {
                     Text("📝 STT 변환 결과", fontWeight = FontWeight.Bold, fontSize = 18.sp,
                         color = MaterialTheme.colorScheme.onSurface)
-                    Divider(modifier = Modifier.padding(vertical = 10.dp),
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp),
                         color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
 
                     if (state.sttProgress > 0) {
@@ -326,7 +344,7 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
                         Text(state.sttStatus, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
 
-                    // Pipeline start button - large, prominent
+                    // Pipeline start button
                     Button(
                         onClick = {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -353,24 +371,40 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
                     }
 
                     if (state.sttText.isNotEmpty()) {
-                        Text("변환 결과:", fontSize = 14.sp, fontWeight = FontWeight.Medium,
-                            color = MaterialTheme.colorScheme.onSurface)
-                        Spacer(Modifier.height(6.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("변환 결과:", fontSize = 14.sp, fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.onSurface)
+                            TextButton(
+                                onClick = {
+                                    fullScreenTitle = "📝 STT 변환 결과"
+                                    fullScreenText = state.sttText
+                                    showFullScreen = true
+                                }
+                            ) {
+                                Icon(Icons.Filled.OpenInFull, null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("전체보기", fontSize = 13.sp)
+                            }
+                        }
+                        Spacer(Modifier.height(4.dp))
                         Surface(
-                            modifier = Modifier.fillMaxWidth().heightIn(max = 200.dp),
+                            modifier = Modifier.fillMaxWidth(),
                             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
                             shape = RoundedCornerShape(12.dp),
                         ) {
-                            val sttScroll = rememberScrollState()
-                            SelectionContainer {
-                                Text(
-                                    state.sttText,
-                                    modifier = Modifier.padding(12.dp).verticalScroll(sttScroll),
-                                    fontSize = 14.sp,
-                                    lineHeight = 22.sp,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                            }
+                            Text(
+                                state.sttText,
+                                modifier = Modifier.padding(12.dp),
+                                fontSize = 14.sp,
+                                lineHeight = 22.sp,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 8,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
                     }
                 }
@@ -386,7 +420,7 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
                 Column(modifier = Modifier.padding(20.dp)) {
                     Text("📋 회의록 요약", fontWeight = FontWeight.Bold, fontSize = 18.sp,
                         color = MaterialTheme.colorScheme.onSurface)
-                    Divider(modifier = Modifier.padding(vertical = 10.dp),
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp),
                         color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
 
                     if (state.summaryProgress > 0) {
@@ -401,24 +435,40 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
                     }
 
                     if (state.summaryText.isNotEmpty()) {
-                        Text("요약 결과:", fontSize = 14.sp, fontWeight = FontWeight.Medium,
-                            color = MaterialTheme.colorScheme.onSurface)
-                        Spacer(Modifier.height(6.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("요약 결과:", fontSize = 14.sp, fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.onSurface)
+                            TextButton(
+                                onClick = {
+                                    fullScreenTitle = "📋 회의록 요약"
+                                    fullScreenText = state.summaryText
+                                    showFullScreen = true
+                                }
+                            ) {
+                                Icon(Icons.Filled.OpenInFull, null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("전체보기", fontSize = 13.sp)
+                            }
+                        }
+                        Spacer(Modifier.height(4.dp))
                         Surface(
-                            modifier = Modifier.fillMaxWidth().heightIn(max = 300.dp),
+                            modifier = Modifier.fillMaxWidth(),
                             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
                             shape = RoundedCornerShape(12.dp),
                         ) {
-                            val sumScroll = rememberScrollState()
-                            SelectionContainer {
-                                Text(
-                                    state.summaryText,
-                                    modifier = Modifier.padding(12.dp).verticalScroll(sumScroll),
-                                    fontSize = 14.sp,
-                                    lineHeight = 22.sp,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                            }
+                            Text(
+                                state.summaryText,
+                                modifier = Modifier.padding(12.dp),
+                                fontSize = 14.sp,
+                                lineHeight = 22.sp,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 10,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
                     }
                 }
@@ -433,14 +483,31 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
                     shape = RoundedCornerShape(16.dp)
                 ) {
                     Column(modifier = Modifier.padding(20.dp)) {
-                        Text("📊 핵심 지표", fontWeight = FontWeight.Bold, fontSize = 18.sp,
-                            color = MaterialTheme.colorScheme.onSurface)
-                        Divider(modifier = Modifier.padding(vertical = 10.dp),
-                            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
-                        SelectionContainer {
-                            Text(state.metricsText, fontSize = 14.sp, lineHeight = 22.sp,
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("📊 핵심 지표", fontWeight = FontWeight.Bold, fontSize = 18.sp,
                                 color = MaterialTheme.colorScheme.onSurface)
+                            TextButton(
+                                onClick = {
+                                    fullScreenTitle = "📊 핵심 지표"
+                                    fullScreenText = state.metricsText
+                                    showFullScreen = true
+                                }
+                            ) {
+                                Icon(Icons.Filled.OpenInFull, null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("전체보기", fontSize = 13.sp)
+                            }
                         }
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp),
+                            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+                        Text(state.metricsText, fontSize = 14.sp, lineHeight = 22.sp,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 6,
+                            overflow = TextOverflow.Ellipsis)
                     }
                 }
             }
@@ -489,6 +556,198 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
 }
 
 /**
+ * 전체화면 마크다운 렌더링 다이얼로그
+ * - WebView로 마크다운 표/서식을 HTML로 렌더링
+ * - 스크롤과 텍스트 선택(길게 눌러 복사)이 동시에 가능
+ */
+@Composable
+private fun FullScreenTextDialog(
+    title: String,
+    text: String,
+    onDismiss: () -> Unit
+) {
+    val htmlContent = remember(text) { markdownToHtml(text) }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(top = 32.dp),
+            color = MaterialTheme.colorScheme.background,
+            shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)
+        ) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                // 헤더
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(title, fontWeight = FontWeight.Bold, fontSize = 18.sp,
+                        color = MaterialTheme.colorScheme.onSurface)
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Filled.Close, "닫기")
+                    }
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+
+                // 안내 문구
+                Text(
+                    "길게 눌러 원하는 부분을 선택하여 복사하세요",
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                // WebView — 마크다운을 HTML로 렌더링, 스크롤/복사 자유
+                AndroidView(
+                    factory = { context ->
+                        WebView(context).apply {
+                            settings.apply {
+                                javaScriptEnabled = false
+                                defaultTextEncodingName = "UTF-8"
+                                loadWithOverviewMode = true
+                                useWideViewPort = true
+                            }
+                            isLongClickable = true
+                            setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                            loadDataWithBaseURL(null, htmlContent, "text/html", "UTF-8", null)
+                        }
+                    },
+                    update = { webView ->
+                        webView.loadDataWithBaseURL(null, htmlContent, "text/html", "UTF-8", null)
+                    },
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 4.dp)
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 마크다운 텍스트를 HTML로 변환
+ * - 표(table), 헤더(#), 굵게(**), 리스트(-), 수평선(---) 지원
+ */
+private fun markdownToHtml(markdown: String): String {
+    val body = StringBuilder()
+    val lines = markdown.split("\n")
+    var inTable = false
+    var isFirstTableRow = true
+
+    for (line in lines) {
+        val trimmed = line.trim()
+
+        // 테이블 구분선 (|---|---|) → 무시
+        if (trimmed.matches(Regex("^\\|[\\s\\-:|]+\\|$"))) {
+            continue
+        }
+
+        // 테이블 행
+        if (trimmed.startsWith("|") && trimmed.endsWith("|")) {
+            if (!inTable) {
+                body.append("<table>")
+                inTable = true
+                isFirstTableRow = true
+            }
+            val cells = trimmed.split("|")
+                .filter { it.isNotBlank() }
+                .map { it.trim() }
+            val tag = if (isFirstTableRow) "th" else "td"
+            body.append("<tr>")
+            cells.forEach { cell ->
+                body.append("<$tag>${inlineMd(cell)}</$tag>")
+            }
+            body.append("</tr>")
+            isFirstTableRow = false
+            continue
+        }
+
+        // 테이블 종료
+        if (inTable) {
+            body.append("</table>")
+            inTable = false
+        }
+
+        when {
+            trimmed.startsWith("#### ") -> body.append("<h4>${inlineMd(trimmed.drop(5))}</h4>")
+            trimmed.startsWith("### ") -> body.append("<h3>${inlineMd(trimmed.drop(4))}</h3>")
+            trimmed.startsWith("## ") -> body.append("<h2>${inlineMd(trimmed.drop(3))}</h2>")
+            trimmed.startsWith("# ") -> body.append("<h1>${inlineMd(trimmed.drop(2))}</h1>")
+            trimmed == "---" || trimmed == "***" -> body.append("<hr>")
+            trimmed.startsWith("- ") -> body.append("<div class='li'>• ${inlineMd(trimmed.drop(2))}</div>")
+            trimmed.matches(Regex("^\\d+\\.\\s.*")) -> {
+                val content = trimmed.replaceFirst(Regex("^\\d+\\.\\s"), "")
+                body.append("<div class='li'>${trimmed.substringBefore(" ")} ${inlineMd(content)}</div>")
+            }
+            trimmed.isEmpty() -> body.append("<br>")
+            else -> body.append("<p>${inlineMd(trimmed)}</p>")
+        }
+    }
+
+    if (inTable) body.append("</table>")
+
+    return """<!DOCTYPE html>
+<html><head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+<style>
+* { box-sizing: border-box; }
+body {
+    font-family: 'Noto Sans KR', -apple-system, sans-serif;
+    font-size: 15px;
+    line-height: 1.7;
+    color: #1a1a1a;
+    padding: 12px 16px;
+    margin: 0;
+    word-break: keep-all;
+}
+h1 { font-size: 20px; margin: 18px 0 8px; color: #111; border-bottom: 2px solid #2196F3; padding-bottom: 4px; }
+h2 { font-size: 17px; margin: 14px 0 6px; color: #1565C0; }
+h3 { font-size: 15px; margin: 12px 0 4px; color: #333; }
+h4 { font-size: 14px; margin: 10px 0 4px; color: #555; }
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 12px 0;
+    font-size: 14px;
+}
+th, td {
+    border: 1px solid #ccc;
+    padding: 8px 12px;
+    text-align: left;
+    vertical-align: top;
+}
+th { background: #e3f2fd; font-weight: bold; color: #1565C0; }
+tr:nth-child(even) td { background: #fafafa; }
+hr { border: none; border-top: 1px solid #ddd; margin: 16px 0; }
+p { margin: 4px 0; }
+.li { padding: 2px 0 2px 8px; }
+strong { color: #1565C0; }
+</style>
+</head><body>
+$body
+</body></html>"""
+}
+
+/**
+ * 인라인 마크다운 → HTML (굵게, 이모지 보존)
+ */
+private fun inlineMd(text: String): String {
+    return text
+        .replace(Regex("\\*\\*(.+?)\\*\\*"), "<strong>$1</strong>")
+        .replace(Regex("__(.+?)__"), "<strong>$1</strong>")
+        .replace(Regex("\\*(.+?)\\*"), "<em>$1</em>")
+        .replace(Regex("`(.+?)`"), "<code>$1</code>")
+}
+
+/**
  * 파일이름 입력 다이얼로그
  * 변환 완료 후 저장 직전에 표시되어 사용자가 파일이름을 확인/수정할 수 있게 함
  */
@@ -514,7 +773,7 @@ private fun FileNameInputDialog(
                     label = { Text("파일이름") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    suffix = { Text(".txt", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    suffix = { Text(".md", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 )
             }
         },
@@ -536,9 +795,6 @@ private fun FileNameInputDialog(
 
 /**
  * 전화 수신 시 화면 상단에 표시되는 오버레이 카드
- * - 전화번호 표시
- * - 수락 버튼 (녹음 자동 일시정지 → 통화 → 통화 종료 후 자동 재개)
- * - 거절 버튼 (녹음 계속 유지)
  */
 @Composable
 private fun IncomingCallOverlay(
@@ -561,7 +817,6 @@ private fun IncomingCallOverlay(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // 전화 아이콘 + 제목
             Icon(
                 Icons.Filled.Phone, contentDescription = null,
                 tint = Color(0xFF4CAF50),
@@ -590,12 +845,10 @@ private fun IncomingCallOverlay(
 
             Spacer(Modifier.height(4.dp))
 
-            // 수락/거절 버튼
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                // 거절 버튼
                 FilledTonalButton(
                     onClick = onReject,
                     modifier = Modifier.weight(1f).height(52.dp),
@@ -610,7 +863,6 @@ private fun IncomingCallOverlay(
                     Text("거절", fontSize = 16.sp, fontWeight = FontWeight.Bold)
                 }
 
-                // 수락 버튼
                 FilledTonalButton(
                     onClick = onAccept,
                     modifier = Modifier.weight(1f).height(52.dp),
