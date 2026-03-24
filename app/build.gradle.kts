@@ -89,5 +89,8 @@ dependencies {
     // DataStore (settings)
     implementation("androidx.datastore:datastore-preferences:1.1.1")
 
+    // DocumentFile (SAF 저장경로 지원)
+    implementation("androidx.documentfile:documentfile:1.0.1")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.net.Uri
 import android.os.Environment
+import android.provider.DocumentsContract
 import android.util.Log
 import androidx.documentfile.provider.DocumentFile
 import java.io.File
@@ -96,23 +97,11 @@ class ConfigManager(private val context: Context) {
     val audioSaveDir: File
         get() {
             val baseDir = recordingDir
-            // If baseDir is a SAF URI, use DocumentFile API
-            if (baseDir.startsWith("content://")) {
-                val uri = Uri.parse(baseDir)
-                val docFile = DocumentFile.fromTreeUri(context, uri)
-                if (docFile != null) {
-                    var subDir = docFile.findFile(audioSubdir)
-                    if (subDir == null) {
-                        subDir = docFile.createDirectory(audioSubdir)
-                    }
-                    if (subDir != null) {
-                        Log.d(TAG, "audioSaveDir (SAF): ${subDir.uri}")
-                        return File(subDir.uri.toString())
-                    }
-                }
-            }
-            // Fall back to traditional File API
-            return File(baseDir, audioSubdir).also {
+            // SAF URI → 실제 파일 경로 변환 후 File API 사용
+            val resolvedBase = if (baseDir.startsWith("content://")) {
+                safUriToFilePath(baseDir) ?: defaultBaseDir
+            } else baseDir
+            return File(resolvedBase, audioSubdir).also {
                 if (!it.exists()) {
                     val created = it.mkdirs()
                     Log.d(TAG, "audioSaveDir mkdirs: $created, path: ${it.absolutePath}")
@@ -123,29 +112,46 @@ class ConfigManager(private val context: Context) {
     val summarySaveDir: File
         get() {
             val baseDir = recordingDir
-            // If baseDir is a SAF URI, use DocumentFile API
-            if (baseDir.startsWith("content://")) {
-                val uri = Uri.parse(baseDir)
-                val docFile = DocumentFile.fromTreeUri(context, uri)
-                if (docFile != null) {
-                    var subDir = docFile.findFile(summarySubdir)
-                    if (subDir == null) {
-                        subDir = docFile.createDirectory(summarySubdir)
-                    }
-                    if (subDir != null) {
-                        Log.d(TAG, "summarySaveDir (SAF): ${subDir.uri}")
-                        return File(subDir.uri.toString())
-                    }
-                }
-            }
-            // Fall back to traditional File API
-            return File(baseDir, summarySubdir).also {
+            // SAF URI → 실제 파일 경로 변환 후 File API 사용
+            val resolvedBase = if (baseDir.startsWith("content://")) {
+                safUriToFilePath(baseDir) ?: defaultBaseDir
+            } else baseDir
+            return File(resolvedBase, summarySubdir).also {
                 if (!it.exists()) {
                     val created = it.mkdirs()
                     Log.d(TAG, "summarySaveDir mkdirs: $created, path: ${it.absolutePath}")
                 }
             }
         }
+
+    /**
+     * SAF tree URI → 실제 파일시스템 경로 변환
+     * content://com.android.externalstorage/tree/primary:Downloads → /storage/emulated/0/Downloads
+     * content://com.android.externalstorage/tree/XXXX-XXXX:Folder → /storage/XXXX-XXXX/Folder
+     */
+    private fun safUriToFilePath(uriString: String): String? {
+        return try {
+            val uri = Uri.parse(uriString)
+            val docId = DocumentFile.fromTreeUri(context, uri)?.uri?.let {
+                DocumentsContract.getTreeDocumentId(it)
+            } ?: return null
+            val split = docId.split(":")
+            if (split.size < 2) return null
+            val storageId = split[0]  // "primary" or SD card ID like "XXXX-XXXX"
+            val relativePath = split[1]
+            val basePath = if (storageId == "primary") {
+                Environment.getExternalStorageDirectory().absolutePath
+            } else {
+                "/storage/$storageId"
+            }
+            File(basePath, relativePath).absolutePath.also {
+                Log.d(TAG, "SAF URI resolved: $uriString → $it")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to resolve SAF URI: $uriString", e)
+            null
+        }
+    }
 
     // === Google Drive ===
     // 기본 폴더 ID — 사용자 Drive에 이미 존재하는 폴더
