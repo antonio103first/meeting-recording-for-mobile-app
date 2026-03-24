@@ -27,6 +27,11 @@ class ConfigManager(private val context: Context) {
         get() = prefs.getString("clova_secret_key", "") ?: ""
         set(v) = prefs.edit().putString("clova_secret_key", v).apply()
 
+    // V2.0: OpenAI API (Whisper STT + GPT-4o 요약)
+    var chatGptApiKey: String
+        get() = prefs.getString("chatgpt_api_key", "") ?: ""
+        set(v) = prefs.edit().putString("chatgpt_api_key", v).apply()
+
     // === Engine Selection ===
     var sttEngine: String
         get() = prefs.getString("stt_engine", "clova") ?: "clova"

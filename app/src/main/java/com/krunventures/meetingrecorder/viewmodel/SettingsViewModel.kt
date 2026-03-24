@@ -9,6 +9,7 @@ import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import com.google.android.gms.common.api.ApiException
 import com.krunventures.meetingrecorder.data.ConfigManager
+import com.krunventures.meetingrecorder.service.ChatGptService
 import com.krunventures.meetingrecorder.service.ClovaService
 import com.krunventures.meetingrecorder.service.ClaudeService
 import com.krunventures.meetingrecorder.service.GeminiService
@@ -22,6 +23,7 @@ import kotlinx.coroutines.withContext
 data class SettingsUiState(
     val geminiApiKey: String = "",
     val claudeApiKey: String = "",
+    val chatGptApiKey: String = "",
     val clovaInvokeUrl: String = "",
     val clovaSecretKey: String = "",
     val sttEngine: String = "clova",
@@ -31,6 +33,7 @@ data class SettingsUiState(
     val summarySaveDir: String = "",
     val geminiStatus: String = "",
     val clovaStatus: String = "",
+    val chatGptStatus: String = "",
     // Google Drive
     val driveSignedIn: Boolean = false,
     val driveEmail: String = "",
@@ -55,11 +58,13 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     private val geminiService = GeminiService()
     private val clovaService = ClovaService()
     private val claudeService = ClaudeService()
+    private val chatGptService = ChatGptService()
     val driveService = GoogleDriveService(app)
 
     private val _uiState = MutableStateFlow(SettingsUiState(
         geminiApiKey = config.geminiApiKey,
         claudeApiKey = config.claudeApiKey,
+        chatGptApiKey = config.chatGptApiKey,
         clovaInvokeUrl = config.clovaInvokeUrl,
         clovaSecretKey = config.clovaSecretKey,
         sttEngine = config.sttEngine,
@@ -86,9 +91,11 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     fun updateClaudeKey(key: String) { _uiState.value = _uiState.value.copy(claudeApiKey = key) }
     fun updateClovaUrl(url: String) { _uiState.value = _uiState.value.copy(clovaInvokeUrl = url) }
     fun updateClovaKey(key: String) { _uiState.value = _uiState.value.copy(clovaSecretKey = key) }
+    fun updateChatGptKey(key: String) { _uiState.value = _uiState.value.copy(chatGptApiKey = key) }
 
     fun saveGeminiKey() { config.geminiApiKey = _uiState.value.geminiApiKey }
     fun saveClaudeKey() { config.claudeApiKey = _uiState.value.claudeApiKey }
+    fun saveChatGptKey() { config.chatGptApiKey = _uiState.value.chatGptApiKey }
     fun saveClovaKeys() {
         config.clovaInvokeUrl = _uiState.value.clovaInvokeUrl
         config.clovaSecretKey = _uiState.value.clovaSecretKey
@@ -127,6 +134,18 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
             val result = clovaService.testConnection(_uiState.value.clovaInvokeUrl, _uiState.value.clovaSecretKey)
             withContext(Dispatchers.Main) {
                 _uiState.value = _uiState.value.copy(clovaStatus = if (result.success) result.text else "❌ ${result.text}")
+            }
+        }
+    }
+
+    fun testChatGpt() {
+        viewModelScope.launch(Dispatchers.IO) {
+            withContext(Dispatchers.Main) {
+                _uiState.value = _uiState.value.copy(chatGptStatus = "테스트 중...")
+            }
+            val result = chatGptService.testConnection(_uiState.value.chatGptApiKey)
+            withContext(Dispatchers.Main) {
+                _uiState.value = _uiState.value.copy(chatGptStatus = result.text)
             }
         }
     }

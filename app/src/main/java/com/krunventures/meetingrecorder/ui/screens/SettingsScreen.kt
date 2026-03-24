@@ -53,10 +53,13 @@ fun SettingsScreen(viewModel: SettingsViewModel) {
                 Text("STT 엔진:", fontWeight = FontWeight.Medium, fontSize = 14.sp)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     RadioButton(selected = state.sttEngine == "clova", onClick = { viewModel.setSttEngine("clova") })
-                    Text("CLOVA Speech (권장)", fontSize = 13.sp)
-                    Spacer(Modifier.width(16.dp))
+                    Text("CLOVA", fontSize = 13.sp)
+                    Spacer(Modifier.width(8.dp))
                     RadioButton(selected = state.sttEngine == "gemini", onClick = { viewModel.setSttEngine("gemini") })
                     Text("Gemini", fontSize = 13.sp)
+                    Spacer(Modifier.width(8.dp))
+                    RadioButton(selected = state.sttEngine == "whisper", onClick = { viewModel.setSttEngine("whisper") })
+                    Text("Whisper", fontSize = 13.sp)
                 }
 
                 Spacer(Modifier.height(8.dp))
@@ -64,9 +67,12 @@ fun SettingsScreen(viewModel: SettingsViewModel) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     RadioButton(selected = state.aiEngine == "gemini", onClick = { viewModel.setAiEngine("gemini") })
                     Text("Gemini", fontSize = 13.sp)
-                    Spacer(Modifier.width(16.dp))
+                    Spacer(Modifier.width(8.dp))
                     RadioButton(selected = state.aiEngine == "claude", onClick = { viewModel.setAiEngine("claude") })
                     Text("Claude", fontSize = 13.sp)
+                    Spacer(Modifier.width(8.dp))
+                    RadioButton(selected = state.aiEngine == "chatgpt", onClick = { viewModel.setAiEngine("chatgpt") })
+                    Text("GPT-4o", fontSize = 13.sp)
                 }
 
                 Spacer(Modifier.height(8.dp))
@@ -74,7 +80,7 @@ fun SettingsScreen(viewModel: SettingsViewModel) {
                 Column {
                     listOf(
                         "speaker" to "화자 중심", "topic" to "주제 중심",
-                        "formal_md" to "공식 양식 (MD)", "formal_text" to "공식 양식 (텍스트)",
+                        "formal_md" to "회의 양식", "flow" to "흐름 중심",
                         "lecture_md" to "강의 요약"
                     ).forEach { (value, label) ->
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -263,6 +269,41 @@ fun SettingsScreen(viewModel: SettingsViewModel) {
                 Spacer(Modifier.height(8.dp))
                 Button(onClick = { viewModel.saveClaudeKey() }, colors = ButtonDefaults.buttonColors(containerColor = Accent)) {
                     Text("저장")
+                }
+            }
+        }
+
+        // === ChatGPT / OpenAI API ===
+        Card(colors = CardDefaults.cardColors(containerColor = CardBg), elevation = CardDefaults.cardElevation(2.dp)) {
+            Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+                Text("💬 ChatGPT / OpenAI API 설정", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = TextDark)
+                Divider(modifier = Modifier.padding(vertical = 8.dp))
+                Text("Whisper STT + GPT-4o 요약", fontSize = 12.sp, color = Success)
+                Spacer(Modifier.height(8.dp))
+
+                var showChatGptKey by remember { mutableStateOf(false) }
+                OutlinedTextField(
+                    value = state.chatGptApiKey,
+                    onValueChange = { viewModel.updateChatGptKey(it) },
+                    label = { Text("OpenAI API 키") },
+                    visualTransformation = if (showChatGptKey) VisualTransformation.None else PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    trailingIcon = {
+                        TextButton(onClick = { showChatGptKey = !showChatGptKey }) {
+                            Text(if (showChatGptKey) "숨김" else "보기", fontSize = 11.sp)
+                        }
+                    }
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = { viewModel.saveChatGptKey() }, colors = ButtonDefaults.buttonColors(containerColor = Accent)) {
+                        Text("저장")
+                    }
+                    OutlinedButton(onClick = { viewModel.testChatGpt() }) { Text("연결 테스트") }
+                }
+                if (state.chatGptStatus.isNotEmpty()) {
+                    Text(state.chatGptStatus, fontSize = 12.sp, color = TextLight, modifier = Modifier.padding(top = 4.dp))
                 }
             }
         }

@@ -4,6 +4,7 @@ import android.app.Application
 import android.os.Environment
 import android.util.Log
 import com.krunventures.meetingrecorder.data.AppDatabase
+import com.krunventures.meetingrecorder.service.NotificationHelper
 import java.io.File
 import java.io.PrintWriter
 import java.io.StringWriter
@@ -16,6 +17,8 @@ class MeetingApp : Application() {
     override fun onCreate() {
         super.onCreate()
         setupCrashHandler()
+        // 변환 완료 알림 채널 생성 (Android 8.0+)
+        NotificationHelper.createChannels(this)
     }
 
     /**

@@ -69,7 +69,7 @@ class ClaudeService {
         val template = when (summaryMode) {
             "topic" -> GeminiService.SUMMARY_TOPIC
             "formal_md" -> GeminiService.SUMMARY_FORMAL_MD
-            "formal_text" -> GeminiService.SUMMARY_FORMAL_TEXT
+            "flow" -> GeminiService.SUMMARY_FLOW
             "lecture_md" -> GeminiService.SUMMARY_LECTURE_MD
             else -> GeminiService.SUMMARY_SPEAKER
         }

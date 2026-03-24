@@ -57,6 +57,7 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
     private val clovaService = ClovaService()
     private val geminiService = GeminiService()
     private val claudeService = ClaudeService()
+    private val chatGptService = ChatGptService()
     private val fileManager = FileManager()
     private val dao = (app as MeetingApp).database.meetingDao()
 
@@ -70,6 +71,8 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
     private var pendingSttText: String? = null
     private var pendingSummaryText: String? = null
     private var pendingAudioFile: File? = null
+    // 즉시 저장된 녹음파일 (confirmFileName에서 rename 시 사용)
+    private var savedRecordingFile: File? = null
 
     /**
      * UI 상태를 메인 스레드에서 안전하게 업데이트
@@ -224,8 +227,10 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
             currentAudioFile = file
             _uiState.value = _uiState.value.copy(
                 currentFile = file.name,
-                saveStatus = "녹음 저장됨: ${file.name}"
+                saveStatus = "녹음 정지 — 파일 저장 중..."
             )
+            // ★ V2.0: 녹음파일 즉시 저장 + Google Drive 업로드 (데이터 유실 방지)
+            saveRecordingImmediately(file)
         }
         result.onFailure { e ->
             _uiState.value = _uiState.value.copy(error = e.message)
@@ -233,6 +238,68 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
         // 서비스 중지 및 전화 모니터링 중지
         stopService()
         callManager.stopMonitoring()
+    }
+
+    /**
+     * V2.0: 녹음 정지 즉시 녹음파일을 저장 디렉토리에 복사하고 Drive에 업로드
+     * 파이프라인(STT→요약)과 독립적으로 실행 — 앱 크래시/종료에도 녹음파일 보존
+     */
+    private fun saveRecordingImmediately(audioFile: File) {
+        viewModelScope.launch(Dispatchers.IO + exceptionHandler) {
+            try {
+                // 1) 로컬 즉시 저장
+                val saveResult = fileManager.saveRecordingImmediately(audioFile, config.audioSaveDir)
+                val savedFile = saveResult.getOrNull()
+                if (savedFile != null) {
+                    savedRecordingFile = savedFile
+                    Log.d(TAG, "Recording saved immediately: ${savedFile.absolutePath}")
+                    updateUiState { it.copy(
+                        saveStatus = "✅ 녹음파일 저장됨: ${savedFile.name}"
+                    ) }
+
+                    // 알림 표시
+                    NotificationHelper.notifyRecordingSaved(getApplication(), savedFile.name)
+
+                    // 2) Google Drive 업로드 (녹음파일만 먼저)
+                    if (config.driveAutoUpload) {
+                        try {
+                            updateUiState { it.copy(saveStatus = "✅ 녹음 저장 완료 — ☁ Drive 업로드 중...") }
+                            val driveService = GoogleDriveService(getApplication())
+                            if (driveService.initFromLastAccount()) {
+                                val mp3FolderId = config.driveMp3FolderId
+                                if (mp3FolderId.isNotBlank()) {
+                                    val results = driveService.uploadMeetingFiles(
+                                        mp3File = savedFile,
+                                        sttFile = null,
+                                        summaryFile = null,
+                                        mp3FolderId = mp3FolderId,
+                                        txtFolderId = ""
+                                    )
+                                    val ok = results.values.all { it.success }
+                                    updateUiState { it.copy(
+                                        saveStatus = if (ok) "✅ 녹음 저장 + Drive 업로드 완료"
+                                                     else "✅ 녹음 저장 완료 (Drive 일부 실패)"
+                                    ) }
+                                    Log.d(TAG, "Drive upload (recording): ${results.entries.joinToString { "${it.key}=${it.value.success}" }}")
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Drive upload (recording) failed", e)
+                            updateUiState { it.copy(
+                                saveStatus = "✅ 녹음 저장 완료 (Drive 업로드 실패)"
+                            ) }
+                        }
+                    }
+                } else {
+                    Log.e(TAG, "saveRecordingImmediately failed: ${saveResult.exceptionOrNull()?.message}")
+                    updateUiState { it.copy(
+                        saveStatus = "⚠️ 녹음파일 즉시 저장 실패 — 파이프라인 완료 후 저장됩니다."
+                    ) }
+                }
+            } catch (e: Throwable) {
+                Log.e(TAG, "saveRecordingImmediately error", e)
+            }
+        }
     }
 
     // ── 통화 제어 ────────────────────────────────────────────────
@@ -326,22 +393,33 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
         val aiEngine = config.aiEngine
 
         // STT 엔진 키 검증
-        if (sttEngine == "clova") {
-            if (config.clovaInvokeUrl.isBlank() || config.clovaSecretKey.isBlank()) {
-                _uiState.value = _uiState.value.copy(
-                    error = "CLOVA Speech API 키가 설정되지 않았습니다.\n\n" +
-                            "설정 탭에서 CLOVA Speech Invoke URL과 Secret Key를 입력해주세요.\n" +
-                            "(또는 STT 엔진을 Gemini로 변경해주세요.)"
-                )
-                return
+        when (sttEngine) {
+            "clova" -> {
+                if (config.clovaInvokeUrl.isBlank() || config.clovaSecretKey.isBlank()) {
+                    _uiState.value = _uiState.value.copy(
+                        error = "CLOVA Speech API 키가 설정되지 않았습니다.\n\n" +
+                                "설정 탭에서 CLOVA Speech Invoke URL과 Secret Key를 입력해주세요."
+                    )
+                    return
+                }
             }
-        } else {
-            if (config.geminiApiKey.isBlank()) {
-                _uiState.value = _uiState.value.copy(
-                    error = "Gemini API 키가 설정되지 않았습니다.\n\n" +
-                            "설정 탭에서 Gemini API 키를 입력해주세요."
-                )
-                return
+            "whisper" -> {
+                if (config.chatGptApiKey.isBlank()) {
+                    _uiState.value = _uiState.value.copy(
+                        error = "OpenAI API 키가 설정되지 않았습니다.\n\n" +
+                                "설정 탭에서 OpenAI API 키를 입력해주세요."
+                    )
+                    return
+                }
+            }
+            else -> { // gemini
+                if (config.geminiApiKey.isBlank()) {
+                    _uiState.value = _uiState.value.copy(
+                        error = "Gemini API 키가 설정되지 않았습니다.\n\n" +
+                                "설정 탭에서 Gemini API 키를 입력해주세요."
+                    )
+                    return
+                }
             }
         }
 
@@ -350,6 +428,13 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
             _uiState.value = _uiState.value.copy(
                 error = "Claude API 키가 설정되지 않았습니다.\n\n" +
                         "설정 탭에서 Claude API 키를 입력하거나,\n요약 엔진을 Gemini로 변경해주세요."
+            )
+            return
+        }
+        if (aiEngine == "chatgpt" && config.chatGptApiKey.isBlank()) {
+            _uiState.value = _uiState.value.copy(
+                error = "OpenAI API 키가 설정되지 않았습니다.\n\n" +
+                        "설정 탭에서 OpenAI API 키를 입력해주세요."
             )
             return
         }
@@ -407,6 +492,9 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                 updateUiState { it.copy(sttText = sttText) }
                 Log.d(TAG, "STT completed — ${sttText.length} chars")
 
+                // ★ V2.0: STT 변환 완료 알림
+                NotificationHelper.notifySttComplete(getApplication(), audioFile.name)
+
                 // Step 2: Summary
                 val sumResult = runSummary(sttText)
                 if (!sumResult.first) {
@@ -418,6 +506,9 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                 val summaryText = sumResult.second
                 updateUiState { it.copy(summaryText = summaryText) }
                 Log.d(TAG, "Summary completed — ${summaryText.length} chars")
+
+                // ★ V2.0: AI 요약 완료 알림
+                NotificationHelper.notifySummaryComplete(getApplication(), audioFile.name)
 
                 // Step 3: Extract metrics (optional — 실패해도 무시, 저장 대기 전 실행)
                 try {
@@ -469,6 +560,25 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
 
         viewModelScope.launch(Dispatchers.IO) {
             try {
+                // ★ V2.0: 즉시 저장된 녹음파일 이름 변경 (REC_임시이름 → 사용자 입력 이름)
+                val finalAudioFile = try {
+                    val saved = savedRecordingFile
+                    if (saved != null && saved.exists()) {
+                        val renamed = fileManager.renameRecordingFile(saved, fileName)
+                        renamed.getOrNull()?.also {
+                            savedRecordingFile = it
+                            Log.d(TAG, "Recording file renamed: ${saved.name} → ${it.name}")
+                        } ?: saved
+                    } else {
+                        // 즉시 저장이 실패했던 경우 — 여기서 복사 저장
+                        val copyResult = fileManager.copyAudioToSaveDir(audioFile, config.audioSaveDir, fileName)
+                        copyResult.getOrNull() ?: audioFile
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Recording file rename failed", e)
+                    audioFile  // 폴백: 원본 파일 사용
+                }
+
                 // Step 5: Save files (통합 파일: 회의록요약 + STT변환)
                 val combinedFile = try {
                     fileManager.saveCombinedSummary(summaryText, sttText, config.summarySaveDir, fileName)
@@ -478,37 +588,36 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 Log.d(TAG, "Combined summary file saved: ${combinedFile.getOrNull()?.absolutePath}")
 
-                // Step 6: Save to DB
+                // Step 6: Save to DB (최종 경로 반영)
                 try {
                     dao.insert(Meeting(
                         createdAt = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date()),
-                        fileName = audioFile.name,
-                        mp3LocalPath = audioFile.absolutePath,
+                        fileName = finalAudioFile.name,
+                        mp3LocalPath = finalAudioFile.absolutePath,
                         sttLocalPath = combinedFile.getOrNull()?.absolutePath ?: "",
                         summaryLocalPath = combinedFile.getOrNull()?.absolutePath ?: "",
                         sttText = sttText,
                         summaryText = summaryText,
-                        fileSizeMb = fileManager.getFileSizeMb(audioFile)
+                        fileSizeMb = fileManager.getFileSizeMb(finalAudioFile)
                     ))
                     Log.d(TAG, "Meeting saved to DB")
                 } catch (e: Exception) {
                     Log.e(TAG, "DB insert failed", e)
                 }
 
-                // Step 7: Google Drive 자동 업로드
+                // Step 7: Google Drive 자동 업로드 (회의록 파일만 — 녹음파일은 stopRecording에서 이미 업로드)
                 if (config.driveAutoUpload) {
                     try {
-                        updateUiState { it.copy(saveStatus = "☁ Google Drive 업로드 중...") }
+                        updateUiState { it.copy(saveStatus = "☁ 회의록 Drive 업로드 중...") }
                         val driveService = GoogleDriveService(getApplication())
                         if (driveService.initFromLastAccount()) {
-                            val mp3FolderId = config.driveMp3FolderId
                             val txtFolderId = config.driveTxtFolderId
-                            if (mp3FolderId.isNotBlank() || txtFolderId.isNotBlank()) {
+                            if (txtFolderId.isNotBlank()) {
                                 val results = driveService.uploadMeetingFiles(
-                                    mp3File = audioFile,
+                                    mp3File = null,
                                     sttFile = null,
                                     summaryFile = combinedFile.getOrNull(),
-                                    mp3FolderId = mp3FolderId,
+                                    mp3FolderId = "",
                                     txtFolderId = txtFolderId
                                 )
                                 val uploadStatus = buildString {
@@ -556,6 +665,7 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                 pendingSttText = null
                 pendingSummaryText = null
                 pendingAudioFile = null
+                savedRecordingFile = null
             }
         }
     }
@@ -567,17 +677,23 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
         _uiState.value = _uiState.value.copy(
             showFileNameDialog = false,
             isProcessing = false,
-            saveStatus = "저장 취소됨"
+            saveStatus = "저장 취소됨 (녹음파일은 이미 저장됨)"
         )
         pendingSttText = null
         pendingSummaryText = null
         pendingAudioFile = null
+        // savedRecordingFile은 유지 — 이미 저장된 녹음파일은 삭제하지 않음
     }
 
     private suspend fun runStt(audioFile: File): Pair<Boolean, String> {
         val engine = config.sttEngine
+        val engineLabel = when (engine) {
+            "clova" -> "CLOVA Speech"
+            "whisper" -> "Whisper"
+            else -> "Gemini"
+        }
         updateUiState { it.copy(
-            sttStatus = "${if (engine == "clova") "CLOVA Speech" else "Gemini"} STT 시작...",
+            sttStatus = "$engineLabel STT 시작...",
             sttProgress = 0
         ) }
 
@@ -597,25 +713,38 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         return try {
-            if (engine == "clova") {
-                val result = clovaService.transcribe(
-                    audioFile = audioFile,
-                    invokeUrl = config.clovaInvokeUrl,
-                    secretKey = config.clovaSecretKey,
-                    numSpeakers = config.numSpeakers,
-                    onProgress = safeOnProgress,
-                    onStatus = safeOnStatus
-                )
-                Pair(result.success, result.text)
-            } else {
-                val result = geminiService.transcribe(
-                    audioFile = audioFile,
-                    apiKey = config.geminiApiKey,
-                    numSpeakers = config.numSpeakers,
-                    onProgress = safeOnProgress,
-                    onStatus = safeOnStatus
-                )
-                Pair(result.success, result.text)
+            when (engine) {
+                "clova" -> {
+                    val result = clovaService.transcribe(
+                        audioFile = audioFile,
+                        invokeUrl = config.clovaInvokeUrl,
+                        secretKey = config.clovaSecretKey,
+                        numSpeakers = config.numSpeakers,
+                        onProgress = safeOnProgress,
+                        onStatus = safeOnStatus
+                    )
+                    Pair(result.success, result.text)
+                }
+                "whisper" -> {
+                    val result = chatGptService.transcribe(
+                        audioFile = audioFile,
+                        apiKey = config.chatGptApiKey,
+                        numSpeakers = config.numSpeakers,
+                        onProgress = safeOnProgress,
+                        onStatus = safeOnStatus
+                    )
+                    Pair(result.success, result.text)
+                }
+                else -> { // gemini
+                    val result = geminiService.transcribe(
+                        audioFile = audioFile,
+                        apiKey = config.geminiApiKey,
+                        numSpeakers = config.numSpeakers,
+                        onProgress = safeOnProgress,
+                        onStatus = safeOnStatus
+                    )
+                    Pair(result.success, result.text)
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "STT execution failed: ${e.message}", e)
@@ -626,8 +755,13 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun runSummary(sttText: String): Pair<Boolean, String> {
         val aiEngine = config.aiEngine
         val mode = config.summaryMode
+        val engineLabel = when (aiEngine) {
+            "claude" -> "Claude"
+            "chatgpt" -> "GPT-4o"
+            else -> "Gemini"
+        }
         updateUiState { it.copy(
-            summaryStatus = "${if (aiEngine == "claude") "Claude" else "Gemini"} 요약 시작...",
+            summaryStatus = "$engineLabel 요약 시작...",
             summaryProgress = 0
         ) }
 
@@ -640,22 +774,34 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         return try {
-            if (aiEngine == "claude" && config.claudeApiKey.isNotBlank()) {
-                val result = claudeService.summarize(
-                    sttText = sttText,
-                    apiKey = config.claudeApiKey,
-                    summaryMode = mode,
-                    onProgress = safeOnProgress
-                )
-                Pair(result.success, result.text)
-            } else {
-                val result = geminiService.summarize(
-                    sttText = sttText,
-                    apiKey = config.geminiApiKey,
-                    summaryMode = mode,
-                    onProgress = safeOnProgress
-                )
-                Pair(result.success, result.text)
+            when (aiEngine) {
+                "claude" -> {
+                    val result = claudeService.summarize(
+                        sttText = sttText,
+                        apiKey = config.claudeApiKey,
+                        summaryMode = mode,
+                        onProgress = safeOnProgress
+                    )
+                    Pair(result.success, result.text)
+                }
+                "chatgpt" -> {
+                    val result = chatGptService.summarize(
+                        sttText = sttText,
+                        apiKey = config.chatGptApiKey,
+                        summaryMode = mode,
+                        onProgress = safeOnProgress
+                    )
+                    Pair(result.success, result.text)
+                }
+                else -> { // gemini
+                    val result = geminiService.summarize(
+                        sttText = sttText,
+                        apiKey = config.geminiApiKey,
+                        summaryMode = mode,
+                        onProgress = safeOnProgress
+                    )
+                    Pair(result.success, result.text)
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Summary execution failed: ${e.message}", e)
