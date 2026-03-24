@@ -58,6 +58,13 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
         uri?.let { viewModel.setAudioFileFromUri(it) }
     }
 
+    // STT 변환파일 선택 (재요약용)
+    val sttFilePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri?.let { viewModel.selectSttFileFromUri(it) }
+    }
+
     // Pulsing animation for recording indicator
     val infiniteTransition = rememberInfiniteTransition(label = "recording")
     val pulseScale by infiniteTransition.animateFloat(
@@ -106,6 +113,15 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
             suggestedName = state.suggestedFileName,
             onConfirm = { fileName -> viewModel.confirmFileName(fileName) },
             onCancel = { viewModel.cancelFileName() }
+        )
+    }
+
+    // 요약방식 선택 BottomSheet (재요약)
+    if (state.showResummarizeSheet) {
+        SummaryModeBottomSheet(
+            currentMode = "speaker",
+            onDismiss = { viewModel.dismissResummarizeSheet() },
+            onSelect = { mode -> viewModel.startResummarize(mode) }
         )
     }
 
@@ -333,7 +349,7 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
 
                     if (state.sttProgress > 0) {
                         LinearProgressIndicator(
-                            progress = state.sttProgress / 100f,
+                            progress = { state.sttProgress / 100f },
                             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).height(6.dp)
                                 .clip(RoundedCornerShape(3.dp)),
                             color = MaterialTheme.colorScheme.primary,
@@ -425,7 +441,7 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
 
                     if (state.summaryProgress > 0) {
                         LinearProgressIndicator(
-                            progress = state.summaryProgress / 100f,
+                            progress = { state.summaryProgress / 100f },
                             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).height(6.dp)
                                 .clip(RoundedCornerShape(3.dp)),
                         )
@@ -508,6 +524,106 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
                             color = MaterialTheme.colorScheme.onSurface,
                             maxLines = 6,
                             overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
+
+            // === Section 5: 재요약 (STT 변환파일 기반) ===
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                elevation = CardDefaults.cardElevation(2.dp),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(modifier = Modifier.padding(20.dp)) {
+                    Text("🔄 STT 변환파일로 재요약", fontWeight = FontWeight.Bold, fontSize = 18.sp,
+                        color = MaterialTheme.colorScheme.onSurface)
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp),
+                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+
+                    Text(
+                        "기존 STT 변환파일을 다른 요약방식으로 다시 요약합니다.",
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(12.dp))
+
+                    // 선택된 파일명 표시
+                    if (state.selectedSttFile.isNotEmpty()) {
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Filled.Description, null,
+                                    modifier = Modifier.size(18.dp),
+                                    tint = MaterialTheme.colorScheme.primary)
+                                Spacer(Modifier.width(8.dp))
+                                Text(state.selectedSttFile, fontSize = 13.sp,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f))
+                                IconButton(
+                                    onClick = { viewModel.clearResummarize() },
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(Icons.Filled.Close, "선택 취소",
+                                        modifier = Modifier.size(16.dp))
+                                }
+                            }
+                        }
+                        Spacer(Modifier.height(8.dp))
+                    }
+
+                    // STT 파일 선택 버튼
+                    OutlinedButton(
+                        onClick = { sttFilePicker.launch("*/*") },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(Icons.Filled.FileOpen, null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            if (state.selectedSttFile.isEmpty()) "📄 STT 변환파일 선택"
+                            else "다른 파일 선택",
+                            fontSize = 14.sp
+                        )
+                    }
+
+                    Spacer(Modifier.height(8.dp))
+
+                    // 재요약 진행률
+                    if (state.resummarizeProgress > 0) {
+                        LinearProgressIndicator(
+                            progress = { state.resummarizeProgress / 100f },
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).height(6.dp)
+                                .clip(RoundedCornerShape(3.dp)),
+                            color = MaterialTheme.colorScheme.tertiary,
+                            trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                        )
+                    }
+                    if (state.resummarizeStatus.isNotEmpty()) {
+                        Text(state.resummarizeStatus, fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.height(8.dp))
+                    }
+
+                    // 재요약 실행 버튼
+                    Button(
+                        onClick = { viewModel.showResummarizeSheet() },
+                        enabled = state.selectedSttFile.isNotEmpty() && !state.isProcessing,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.tertiary
+                        ),
+                        modifier = Modifier.fillMaxWidth().height(48.dp),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Icon(Icons.Filled.Refresh, null, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("▶ 재요약 실행", fontSize = 15.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -877,6 +993,122 @@ private fun IncomingCallOverlay(
                     Text("수락", fontSize = 16.sp, fontWeight = FontWeight.Bold)
                 }
             }
+        }
+    }
+}
+
+/**
+ * 요약방식 선택 BottomSheet — 재요약 실행 시 표시
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SummaryModeBottomSheet(
+    currentMode: String,
+    onDismiss: () -> Unit,
+    onSelect: (String) -> Unit
+) {
+    var selectedMode by remember { mutableStateOf(currentMode) }
+    val sheetState = rememberModalBottomSheetState()
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp, vertical = 16.dp)
+        ) {
+            Text(
+                "요약 방식 선택",
+                fontWeight = FontWeight.Bold,
+                fontSize = 20.sp,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "선택한 방식으로 STT 텍스트를 다시 요약합니다.",
+                fontSize = 13.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(16.dp))
+
+            val modes = listOf(
+                "speaker" to "화자 중심",
+                "topic" to "주제 중심",
+                "formal_md" to "회의 양식",
+                "flow" to "흐름 중심",
+                "lecture_md" to "강의 요약"
+            )
+
+            modes.forEach { (value, label) ->
+                val isSelected = selectedMode == value
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp),
+                    color = if (isSelected)
+                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                    else Color.Transparent,
+                    shape = RoundedCornerShape(12.dp),
+                    onClick = { selectedMode = value }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(
+                            selected = isSelected,
+                            onClick = { selectedMode = value }
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            label,
+                            fontSize = 16.sp,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        if (value == currentMode) {
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                "현재 설정",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(20.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text("취소", fontSize = 15.sp)
+                }
+                Button(
+                    onClick = { onSelect(selectedMode) },
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary
+                    ),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text("요약 실행", fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+
+            Spacer(Modifier.height(24.dp)) // Bottom safe area
         }
     }
 }

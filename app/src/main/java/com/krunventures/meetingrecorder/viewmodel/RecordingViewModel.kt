@@ -43,7 +43,13 @@ data class RecordingUiState(
     // 통화 상태
     val callState: CallState = CallState.NONE,
     val callerNumber: String = "",
-    val callAutoPaused: Boolean = false  // 통화로 인해 자동 일시정지된 상태
+    val callAutoPaused: Boolean = false,  // 통화로 인해 자동 일시정지된 상태
+    // V2.0: 재요약 기능
+    val selectedSttFile: String = "",  // selected STT file name for resummarization
+    val selectedSttText: String = "",  // loaded STT text content
+    val showResummarizeSheet: Boolean = false,  // show/hide summary mode BottomSheet
+    val resummarizeProgress: Int = 0,  // progress for resummarize
+    val resummarizeStatus: String = ""  // status for resummarize
 )
 
 class RecordingViewModel(app: Application) : AndroidViewModel(app) {
@@ -73,6 +79,8 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
     private var pendingAudioFile: File? = null
     // 즉시 저장된 녹음파일 (confirmFileName에서 rename 시 사용)
     private var savedRecordingFile: File? = null
+    // V2.0: 재요약 기능 — 로드된 STT 파일
+    private var loadedSttFile: File? = null
 
     /**
      * UI 상태를 메인 스레드에서 안전하게 업데이트
@@ -554,29 +562,33 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
     fun confirmFileName(fileName: String) {
         val sttText = pendingSttText ?: return
         val summaryText = pendingSummaryText ?: return
-        val audioFile = pendingAudioFile ?: return
+        val audioFile = pendingAudioFile  // nullable — null in resummarize mode
 
         _uiState.value = _uiState.value.copy(showFileNameDialog = false)
 
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 // ★ V2.0: 즉시 저장된 녹음파일 이름 변경 (REC_임시이름 → 사용자 입력 이름)
-                val finalAudioFile = try {
-                    val saved = savedRecordingFile
-                    if (saved != null && saved.exists()) {
-                        val renamed = fileManager.renameRecordingFile(saved, fileName)
-                        renamed.getOrNull()?.also {
-                            savedRecordingFile = it
-                            Log.d(TAG, "Recording file renamed: ${saved.name} → ${it.name}")
-                        } ?: saved
-                    } else {
-                        // 즉시 저장이 실패했던 경우 — 여기서 복사 저장
-                        val copyResult = fileManager.copyAudioToSaveDir(audioFile, config.audioSaveDir, fileName)
-                        copyResult.getOrNull() ?: audioFile
+                val finalAudioFile = if (audioFile != null) {
+                    try {
+                        val saved = savedRecordingFile
+                        if (saved != null && saved.exists()) {
+                            val renamed = fileManager.renameRecordingFile(saved, fileName)
+                            renamed.getOrNull()?.also {
+                                savedRecordingFile = it
+                                Log.d(TAG, "Recording file renamed: ${saved.name} → ${it.name}")
+                            } ?: saved
+                        } else {
+                            // 즉시 저장이 실패했던 경우 — 여기서 복사 저장
+                            val copyResult = fileManager.copyAudioToSaveDir(audioFile, config.audioSaveDir, fileName)
+                            copyResult.getOrNull() ?: audioFile
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Recording file rename failed", e)
+                        audioFile  // 폴백: 원본 파일 사용
                     }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Recording file rename failed", e)
-                    audioFile  // 폴백: 원본 파일 사용
+                } else {
+                    null  // 재요약 모드: 오디오 파일 없음
                 }
 
                 // Step 5: Save files (통합 파일: 회의록요약 + STT변환)
@@ -592,13 +604,13 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                 try {
                     dao.insert(Meeting(
                         createdAt = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date()),
-                        fileName = finalAudioFile.name,
-                        mp3LocalPath = finalAudioFile.absolutePath,
+                        fileName = finalAudioFile?.name ?: fileName,  // null check for resummarize mode
+                        mp3LocalPath = finalAudioFile?.absolutePath ?: "",  // empty path for resummarize
                         sttLocalPath = combinedFile.getOrNull()?.absolutePath ?: "",
                         summaryLocalPath = combinedFile.getOrNull()?.absolutePath ?: "",
                         sttText = sttText,
                         summaryText = summaryText,
-                        fileSizeMb = fileManager.getFileSizeMb(finalAudioFile)
+                        fileSizeMb = if (finalAudioFile != null) fileManager.getFileSizeMb(finalAudioFile) else 0.0
                     ))
                     Log.d(TAG, "Meeting saved to DB")
                 } catch (e: Exception) {
@@ -807,6 +819,204 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
             Log.e(TAG, "Summary execution failed: ${e.message}", e)
             Pair(false, "요약 중 오류: ${e.message?.take(200) ?: "알 수 없는 오류"}")
         }
+    }
+
+    // ── V2.0: 재요약 기능 ────────────────────────────────────────
+
+    /**
+     * STT 변환파일 목록 가져오기 (요약 저장 디렉토리 내 .md/.txt 파일)
+     */
+    fun getSttFileList(): List<File> {
+        return fileManager.listSummaryFiles(config.summarySaveDir)
+    }
+
+    /**
+     * STT 변환파일 선택 및 로드
+     */
+    fun selectSttFile(file: File) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val text = file.readText(Charsets.UTF_8)
+                loadedSttFile = file
+                updateUiState { it.copy(
+                    selectedSttFile = file.name,
+                    selectedSttText = text,
+                    resummarizeStatus = "파일 로드 완료: ${file.name} (${text.length}자)"
+                ) }
+            } catch (e: Exception) {
+                updateUiState { it.copy(
+                    error = "파일 읽기 실패: ${e.message}"
+                ) }
+            }
+        }
+    }
+
+    /**
+     * URI에서 STT 파일 선택 (파일 선택기 사용 시)
+     */
+    fun selectSttFileFromUri(uri: Uri) {
+        val context = getApplication<MeetingApp>()
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val inputStream = context.contentResolver.openInputStream(uri) ?: return@launch
+                val text = inputStream.bufferedReader(Charsets.UTF_8).readText()
+                inputStream.close()
+                // 임시 파일로 저장
+                val tempFile = File(config.summarySaveDir, "imported_stt_${System.currentTimeMillis()}.txt")
+                tempFile.writeText(text, Charsets.UTF_8)
+                loadedSttFile = tempFile
+                updateUiState { it.copy(
+                    selectedSttFile = uri.lastPathSegment ?: "선택된 파일",
+                    selectedSttText = text,
+                    resummarizeStatus = "파일 로드 완료 (${text.length}자)"
+                ) }
+            } catch (e: Exception) {
+                updateUiState { it.copy(
+                    error = "파일 읽기 실패: ${e.message}"
+                ) }
+            }
+        }
+    }
+
+    /**
+     * 재요약 BottomSheet 표시
+     */
+    fun showResummarizeSheet() {
+        if (_uiState.value.selectedSttText.isBlank()) {
+            _uiState.value = _uiState.value.copy(
+                error = "STT 변환파일을 먼저 선택해주세요."
+            )
+            return
+        }
+        _uiState.value = _uiState.value.copy(showResummarizeSheet = true)
+    }
+
+    fun dismissResummarizeSheet() {
+        _uiState.value = _uiState.value.copy(showResummarizeSheet = false)
+    }
+
+    /**
+     * V2.0: 재요약 실행 — STT 텍스트를 다른 요약방식으로 다시 요약
+     * startPipeline()과 달리 STT 단계를 건너뛰고 요약만 실행
+     */
+    fun startResummarize(summaryMode: String) {
+        val sttText = _uiState.value.selectedSttText
+        if (sttText.isBlank()) {
+            _uiState.value = _uiState.value.copy(error = "STT 텍스트가 비어 있습니다.")
+            return
+        }
+
+        // 요약 엔진 키 검증
+        val aiEngine = config.aiEngine
+        if (aiEngine == "claude" && config.claudeApiKey.isBlank()) {
+            _uiState.value = _uiState.value.copy(error = "Claude API 키가 설정되지 않았습니다.")
+            return
+        }
+        if (aiEngine == "chatgpt" && config.chatGptApiKey.isBlank()) {
+            _uiState.value = _uiState.value.copy(error = "OpenAI API 키가 설정되지 않았습니다.")
+            return
+        }
+        if (aiEngine == "gemini" && config.geminiApiKey.isBlank()) {
+            _uiState.value = _uiState.value.copy(error = "Gemini API 키가 설정되지 않았습니다.")
+            return
+        }
+
+        _uiState.value = _uiState.value.copy(
+            showResummarizeSheet = false,
+            isProcessing = true,
+            error = null,
+            resummarizeProgress = 0,
+            resummarizeStatus = "재요약 시작..."
+        )
+
+        viewModelScope.launch(Dispatchers.IO + exceptionHandler) {
+            try {
+                // 요약방식을 1회성으로 오버라이드하여 실행
+                val engineLabel = when (aiEngine) {
+                    "claude" -> "Claude"
+                    "chatgpt" -> "GPT-4o"
+                    else -> "Gemini"
+                }
+                val modeLabel = when (summaryMode) {
+                    "topic" -> "주제중심"
+                    "formal_md" -> "회의양식"
+                    "flow" -> "흐름중심"
+                    "lecture_md" -> "강의요약"
+                    else -> "화자중심"
+                }
+                updateUiState { it.copy(
+                    resummarizeStatus = "$engineLabel ($modeLabel) 요약 중...",
+                    resummarizeProgress = 10
+                ) }
+
+                val safeOnProgress: (Int) -> Unit = { p ->
+                    try {
+                        viewModelScope.launch(Dispatchers.Main) {
+                            _uiState.value = _uiState.value.copy(resummarizeProgress = p)
+                        }
+                    } catch (_: Exception) {}
+                }
+
+                // 요약 실행 (선택된 summaryMode로 1회성 실행)
+                val result = when (aiEngine) {
+                    "claude" -> claudeService.summarize(sttText, config.claudeApiKey, summaryMode, onProgress = safeOnProgress)
+                    "chatgpt" -> chatGptService.summarize(sttText, config.chatGptApiKey, summaryMode, onProgress = safeOnProgress)
+                    else -> geminiService.summarize(sttText, config.geminiApiKey, summaryMode, onProgress = safeOnProgress)
+                }
+
+                if (!result.success) {
+                    updateUiState { it.copy(
+                        isProcessing = false,
+                        error = "재요약 실패:\n${result.text}"
+                    ) }
+                    return@launch
+                }
+
+                updateUiState { it.copy(
+                    resummarizeProgress = 90,
+                    resummarizeStatus = "재요약 완료 — 파일이름 입력 대기"
+                ) }
+
+                // 알림
+                NotificationHelper.notifySummaryComplete(getApplication(), _uiState.value.selectedSttFile)
+
+                // 파일이름 생성 (날짜_원본파일명_요약방식.md)
+                val originalName = loadedSttFile?.name ?: "회의록"
+                val suggestedName = fileManager.getResummarizeFileName(originalName, summaryMode)
+
+                // pendingResummarize 저장
+                pendingSttText = sttText
+                pendingSummaryText = result.text
+                pendingAudioFile = null  // 재요약에는 오디오 파일 없음
+
+                updateUiState { it.copy(
+                    summaryText = result.text,
+                    showFileNameDialog = true,
+                    suggestedFileName = suggestedName,
+                    saveStatus = "파일이름을 입력해주세요..."
+                ) }
+
+            } catch (e: Throwable) {
+                Log.e(TAG, "Resummarize error", e)
+                updateUiState { it.copy(
+                    isProcessing = false,
+                    error = "재요약 오류:\n${e.message?.take(300)}"
+                ) }
+            }
+        }
+    }
+
+    /**
+     * 재요약 관련 상태 초기화
+     */
+    fun clearResummarize() {
+        _uiState.value = _uiState.value.copy(
+            selectedSttFile = "",
+            selectedSttText = "",
+            resummarizeProgress = 0,
+            resummarizeStatus = ""
+        )
+        loadedSttFile = null
     }
 
     fun clearError() {

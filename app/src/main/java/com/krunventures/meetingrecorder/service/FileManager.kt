@@ -57,6 +57,29 @@ class FileManager {
     }
 
     /**
+     * V2.0: 재요약 결과를 별도 파일로 저장
+     * 기존 STT 텍스트 없이 요약 결과만 저장
+     */
+    fun saveResummarizedSummary(summaryText: String, saveDir: File, fileName: String): Result<File> {
+        return try {
+            saveDir.mkdirs()
+            val content = buildString {
+                appendLine("# 회의록 재요약")
+                appendLine()
+                appendLine(summaryText.trim())
+                appendLine()
+                appendLine("---")
+                appendLine("회의녹음요약 앱 재요약 자동 생성")
+            }
+            val file = File(saveDir, "${fileName}.md")
+            file.writeText(content, Charsets.UTF_8)
+            Result.success(file)
+        } catch (e: Exception) {
+            Result.failure(Exception("재요약 파일 저장 실패: ${e.message}"))
+        }
+    }
+
+    /**
      * 녹음 정지 즉시 호출 — 녹음파일을 저장 디렉토리에 즉시 복사
      * 임시 이름(타임스탬프)으로 저장하고, 나중에 사용자가 파일이름을 확정하면 rename
      *
@@ -110,6 +133,28 @@ class FileManager {
         } catch (e: Exception) {
             Result.failure(Exception("오디오 파일 복사 실패: ${e.message}"))
         }
+    }
+
+    /**
+     * V2.0: 재요약용 파일이름 포맷 생성
+     * 형식: {날짜}_{원본파일명}_{요약방식라벨}.md
+     * 예: 20260322_투자심사_흐름중심.md
+     */
+    fun getResummarizeFileName(originalFileName: String, summaryMode: String): String {
+        val date = getDefaultBaseName().take(8)  // yyyyMMdd 부분만
+        val baseName = originalFileName
+            .removeSuffix(".md")
+            .removeSuffix(".txt")
+            .removeSuffix(".stt")
+            .take(50)  // 너무 긴 이름 방지
+        val modeLabel = when (summaryMode) {
+            "topic" -> "주제중심"
+            "formal_md" -> "회의양식"
+            "flow" -> "흐름중심"
+            "lecture_md" -> "강의요약"
+            else -> "화자중심"
+        }
+        return "${date}_${baseName}_${modeLabel}"
     }
 
     fun getFileSizeMb(file: File): Double =
