@@ -2,8 +2,10 @@ package com.krunventures.meetingrecorder.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.net.Uri
 import android.os.Environment
 import android.util.Log
+import androidx.documentfile.provider.DocumentFile
 import java.io.File
 
 class ConfigManager(private val context: Context) {
@@ -58,16 +60,27 @@ class ConfigManager(private val context: Context) {
             return File(context.filesDir, "Meeting recording").absolutePath
         }
 
+    // User-selected base directory via SAF (Storage Access Framework)
+    var userSelectedBaseDir: String
+        get() = prefs.getString("user_selected_base_dir", "") ?: ""
+        set(v) = prefs.edit().putString("user_selected_base_dir", v).apply()
+
     var recordingDir: String
         get() {
+            // 1. Check if user has selected a SAF directory
+            val safUri = userSelectedBaseDir
+            if (safUri.isNotBlank()) {
+                return safUri  // Return the SAF URI string
+            }
+            // 2. Check saved dir (v2)
             val saved = prefs.getString("recording_dir_v2", null)
             if (saved != null) return saved
-            // 기존 v1 경로가 있으면 마이그레이션
+            // 3. Migrate from v1 if exists
             val legacyDir = prefs.getString("recording_dir", null)
             if (legacyDir != null && legacyDir.startsWith("/storage/emulated")) {
-                // 레거시 공용 저장소 경로 → 앱 전용으로 마이그레이션
                 Log.w(TAG, "Migrating from legacy storage path: $legacyDir")
             }
+            // 4. Fall back to default
             return defaultBaseDir
         }
         set(v) = prefs.edit().putString("recording_dir_v2", v).apply()
@@ -81,18 +94,56 @@ class ConfigManager(private val context: Context) {
         set(v) = prefs.edit().putString("summary_subdir", v).apply()
 
     val audioSaveDir: File
-        get() = File(recordingDir, audioSubdir).also {
-            if (!it.exists()) {
-                val created = it.mkdirs()
-                Log.d(TAG, "audioSaveDir mkdirs: $created, path: ${it.absolutePath}")
+        get() {
+            val baseDir = recordingDir
+            // If baseDir is a SAF URI, use DocumentFile API
+            if (baseDir.startsWith("content://")) {
+                val uri = Uri.parse(baseDir)
+                val docFile = DocumentFile.fromTreeUri(context, uri)
+                if (docFile != null) {
+                    var subDir = docFile.findFile(audioSubdir)
+                    if (subDir == null) {
+                        subDir = docFile.createDirectory(audioSubdir)
+                    }
+                    if (subDir != null) {
+                        Log.d(TAG, "audioSaveDir (SAF): ${subDir.uri}")
+                        return File(subDir.uri.toString())
+                    }
+                }
+            }
+            // Fall back to traditional File API
+            return File(baseDir, audioSubdir).also {
+                if (!it.exists()) {
+                    val created = it.mkdirs()
+                    Log.d(TAG, "audioSaveDir mkdirs: $created, path: ${it.absolutePath}")
+                }
             }
         }
 
     val summarySaveDir: File
-        get() = File(recordingDir, summarySubdir).also {
-            if (!it.exists()) {
-                val created = it.mkdirs()
-                Log.d(TAG, "summarySaveDir mkdirs: $created, path: ${it.absolutePath}")
+        get() {
+            val baseDir = recordingDir
+            // If baseDir is a SAF URI, use DocumentFile API
+            if (baseDir.startsWith("content://")) {
+                val uri = Uri.parse(baseDir)
+                val docFile = DocumentFile.fromTreeUri(context, uri)
+                if (docFile != null) {
+                    var subDir = docFile.findFile(summarySubdir)
+                    if (subDir == null) {
+                        subDir = docFile.createDirectory(summarySubdir)
+                    }
+                    if (subDir != null) {
+                        Log.d(TAG, "summarySaveDir (SAF): ${subDir.uri}")
+                        return File(subDir.uri.toString())
+                    }
+                }
+            }
+            // Fall back to traditional File API
+            return File(baseDir, summarySubdir).also {
+                if (!it.exists()) {
+                    val created = it.mkdirs()
+                    Log.d(TAG, "summarySaveDir mkdirs: $created, path: ${it.absolutePath}")
+                }
             }
         }
 

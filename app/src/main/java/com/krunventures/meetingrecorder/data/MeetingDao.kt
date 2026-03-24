@@ -28,4 +28,10 @@ interface MeetingDao {
 
     @Query("UPDATE meetings SET mp3LocalPath = :mp3Path, sttLocalPath = :sttPath, summaryLocalPath = :summaryPath WHERE id = :id")
     suspend fun updateFilePaths(id: Int, mp3Path: String, sttPath: String, summaryPath: String)
+
+    @Query("UPDATE meetings SET speakerMap = :speakerMap WHERE id = :id")
+    suspend fun updateSpeakerMap(id: Int, speakerMap: String?)
+
+    @Query("SELECT * FROM meetings WHERE fileName = :fileName LIMIT 1")
+    suspend fun getByFileName(fileName: String): Meeting?
 }

@@ -29,8 +29,10 @@ data class SettingsUiState(
     val sttEngine: String = "clova",
     val aiEngine: String = "gemini",
     val summaryMode: String = "speaker",
+    val numSpeakers: Int = 2,
     val audioSaveDir: String = "",
     val summarySaveDir: String = "",
+    val userSelectedBaseDir: String = "",
     val geminiStatus: String = "",
     val clovaStatus: String = "",
     val chatGptStatus: String = "",
@@ -70,8 +72,10 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         sttEngine = config.sttEngine,
         aiEngine = config.aiEngine,
         summaryMode = config.summaryMode,
+        numSpeakers = config.numSpeakers,
         audioSaveDir = config.audioSaveDir.absolutePath,
         summarySaveDir = config.summarySaveDir.absolutePath,
+        userSelectedBaseDir = config.userSelectedBaseDir,
         driveSignedIn = driveService.isSignedIn(),
         driveEmail = driveService.getAccountEmail(),
         driveAutoUpload = config.driveAutoUpload,
@@ -112,6 +116,20 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     fun setSummaryMode(mode: String) {
         config.summaryMode = mode
         _uiState.value = _uiState.value.copy(summaryMode = mode)
+    }
+
+    fun setNumSpeakers(num: Int) {
+        config.numSpeakers = num
+        _uiState.value = _uiState.value.copy(numSpeakers = num)
+    }
+
+    fun setUserSelectedBaseDir(uri: String) {
+        config.userSelectedBaseDir = uri
+        _uiState.value = _uiState.value.copy(
+            userSelectedBaseDir = uri,
+            audioSaveDir = config.audioSaveDir.absolutePath,
+            summarySaveDir = config.summarySaveDir.absolutePath
+        )
     }
 
     fun testGemini() {

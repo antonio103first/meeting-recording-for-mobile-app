@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import java.io.File
 
 data class MeetingListUiState(
@@ -20,9 +21,12 @@ data class MeetingListUiState(
     val showRenameDialog: Boolean = false,
     val showDeleteDialog: Boolean = false,
     val showMoveDialog: Boolean = false,
+    val showSpeakerDialog: Boolean = false,
+    val showShareSheet: Boolean = false,
     val targetMeeting: Meeting? = null,
     val renameText: String = "",
     val statusMessage: String = "",
+    val currentSpeakers: List<Pair<String, String>> = emptyList(),
 )
 
 class MeetingListViewModel(app: Application) : AndroidViewModel(app) {
@@ -272,5 +276,139 @@ class MeetingListViewModel(app: Application) : AndroidViewModel(app) {
 
     fun clearStatus() {
         _uiState.value = _uiState.value.copy(statusMessage = "")
+    }
+
+    // === Speaker Name Change ===
+    fun extractSpeakers(sttText: String): List<String> {
+        // Regex to find [화자1], [화자2], [Speaker 1] etc. patterns
+        val pattern = Regex("\\[(화자\\d+|Speaker\\s\\d+)\\]")
+        return pattern.findAll(sttText)
+            .map { it.groupValues[1] }
+            .distinct()
+            .toList()
+    }
+
+    fun replaceSpeakerNames(text: String, speakerMap: Map<String, String>): String {
+        var result = text
+        speakerMap.forEach { (label, name) ->
+            result = result.replace("[$label]", "[$name]")
+        }
+        return result
+    }
+
+    fun showSpeakerDialog() {
+        val meeting = _uiState.value.targetMeeting ?: return
+        val speakers = extractSpeakers(meeting.sttText)
+        val pairs = speakers.map { it to "" }
+        _uiState.value = _uiState.value.copy(
+            showSpeakerDialog = true,
+            showActionMenu = false,
+            currentSpeakers = pairs
+        )
+    }
+
+    fun dismissSpeakerDialog() {
+        _uiState.value = _uiState.value.copy(showSpeakerDialog = false)
+    }
+
+    fun updateSpeakerName(index: Int, newName: String) {
+        val current = _uiState.value.currentSpeakers.toMutableList()
+        if (index < current.size) {
+            current[index] = current[index].copy(second = newName)
+            _uiState.value = _uiState.value.copy(currentSpeakers = current)
+        }
+    }
+
+    fun saveSpeakerMap(meetingId: Int) {
+        val meeting = _uiState.value.targetMeeting ?: return
+        val speakerMap = _uiState.value.currentSpeakers
+            .filter { it.second.isNotBlank() }
+            .associate { it.first to it.second }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                // Serialize to JSON
+                val jsonObj = JSONObject()
+                speakerMap.forEach { (label, name) ->
+                    jsonObj.put(label, name)
+                }
+                val speakerMapJson = jsonObj.toString()
+
+                // Replace speaker names in texts
+                val newSttText = replaceSpeakerNames(meeting.sttText, speakerMap)
+                val newSummaryText = replaceSpeakerNames(meeting.summaryText, speakerMap)
+
+                // Update DB
+                dao.updateSpeakerMap(meetingId, speakerMapJson)
+                dao.updateSummary(meetingId, newSttText, newSummaryText, meeting.summaryLocalPath)
+
+                Log.d(TAG, "Speaker map saved for meeting $meetingId")
+
+                withContext(Dispatchers.Main) {
+                    _uiState.value = _uiState.value.copy(
+                        showSpeakerDialog = false,
+                        targetMeeting = meeting.copy(
+                            sttText = newSttText,
+                            summaryText = newSummaryText,
+                            speakerMap = speakerMapJson
+                        ),
+                        statusMessage = "화자 이름이 변경되었습니다"
+                    )
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to save speaker map", e)
+                withContext(Dispatchers.Main) {
+                    _uiState.value = _uiState.value.copy(
+                        showSpeakerDialog = false,
+                        statusMessage = "화자 이름 변경 실패: ${e.message?.take(100)}"
+                    )
+                }
+            }
+        }
+    }
+
+    // === Share Sheet ===
+    fun showShareSheet() {
+        _uiState.value = _uiState.value.copy(
+            showShareSheet = true,
+            showActionMenu = false
+        )
+    }
+
+    fun dismissShareSheet() {
+        _uiState.value = _uiState.value.copy(showShareSheet = false)
+    }
+
+    fun getShareText(meeting: Meeting, shareTarget: String): String {
+        return when (shareTarget) {
+            "summary" -> {
+                buildString {
+                    appendLine("=== 회의록 요약 ===")
+                    appendLine(meeting.fileName)
+                    appendLine()
+                    append(meeting.summaryText.ifEmpty { "(없음)" })
+                }
+            }
+            "stt" -> {
+                buildString {
+                    appendLine("=== STT 변환 원문 ===")
+                    appendLine(meeting.fileName)
+                    appendLine()
+                    append(meeting.sttText.ifEmpty { "(없음)" })
+                }
+            }
+            "all" -> {
+                buildString {
+                    appendLine("=== ${meeting.fileName} ===")
+                    appendLine()
+                    appendLine("## 회의록 요약")
+                    appendLine(meeting.summaryText.ifEmpty { "(없음)" })
+                    appendLine()
+                    appendLine("## STT 변환 원문")
+                    append(meeting.sttText.ifEmpty { "(없음)" })
+                }
+            }
+            else -> ""
+        }
     }
 }

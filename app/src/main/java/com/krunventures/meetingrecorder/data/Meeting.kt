@@ -16,5 +16,6 @@ data class Meeting(
     val driveMp3Link: String = "",
     val driveSttLink: String = "",
     val driveSummaryLink: String = "",
-    val fileSizeMb: Double = 0.0
+    val fileSizeMb: Double = 0.0,
+    val speakerMap: String? = null
 )

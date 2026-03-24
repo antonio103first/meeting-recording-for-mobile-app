@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import java.io.File
 
 data class RecordingUiState(
@@ -972,6 +973,21 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                     return@launch
                 }
 
+                // Apply speaker map if available
+                var summaryText = result.text
+                try {
+                    val selectedFileName = _uiState.value.selectedSttFile
+                    val matchingMeeting = dao.getByFileName(selectedFileName)
+
+                    if (matchingMeeting != null && !matchingMeeting.speakerMap.isNullOrBlank()) {
+                        summaryText = applySpeakerMap(summaryText, matchingMeeting.speakerMap!!)
+                        Log.d(TAG, "Speaker map applied to resummarize text")
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error applying speaker map during resummarize", e)
+                    // Continue with original text if speaker map lookup fails
+                }
+
                 updateUiState { it.copy(
                     resummarizeProgress = 90,
                     resummarizeStatus = "재요약 완료 — 파일이름 입력 대기"
@@ -986,11 +1002,11 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
 
                 // pendingResummarize 저장
                 pendingSttText = sttText
-                pendingSummaryText = result.text
+                pendingSummaryText = summaryText
                 pendingAudioFile = null  // 재요약에는 오디오 파일 없음
 
                 updateUiState { it.copy(
-                    summaryText = result.text,
+                    summaryText = summaryText,
                     showFileNameDialog = true,
                     suggestedFileName = suggestedName,
                     saveStatus = "파일이름을 입력해주세요..."
@@ -1043,6 +1059,28 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to check crash log", e)
+        }
+    }
+
+    /**
+     * Apply speaker map to summary text by replacing speaker labels with mapped names
+     * Handles patterns like [화자1], 화자1:, 화자1 → mapped name
+     */
+    private fun applySpeakerMap(text: String, speakerMapJson: String): String {
+        return try {
+            val json = JSONObject(speakerMapJson)
+            var result = text
+            json.keys().forEach { key ->
+                val name = json.getString(key)
+                // Replace patterns: [화자1] → [김대표], 화자1: → 김대표:, 화자1  → 김대표
+                result = result.replace("[$key]", "[$name]")
+                    .replace("$key:", "$name:")
+                    .replace("$key ", "$name ")
+            }
+            result
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to apply speaker map", e)
+            text  // Return original text if parsing fails
         }
     }
 
