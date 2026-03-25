@@ -33,8 +33,8 @@ class ChatGptService {
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(600, TimeUnit.SECONDS)
-        .writeTimeout(120, TimeUnit.SECONDS)
+        .readTimeout(3600, TimeUnit.SECONDS)  // 3시간 녹음 STT 처리 대기
+        .writeTimeout(300, TimeUnit.SECONDS)  // Whisper 25MB 업로드 대기
         .build()
     private val gson = Gson()
 

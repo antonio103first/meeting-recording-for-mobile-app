@@ -92,15 +92,26 @@ class CallManager(private val context: Context) {
 
     @RequiresApi(Build.VERSION_CODES.S)
     private fun registerTelephonyCallback() {
-        val callback = object : TelephonyCallback(), TelephonyCallback.CallStateListener {
-            override fun onCallStateChanged(state: Int) {
-                handleCallState(state)
+        try {
+            val callback = object : TelephonyCallback(), TelephonyCallback.CallStateListener {
+                override fun onCallStateChanged(state: Int) {
+                    try {
+                        handleCallState(state)
+                    } catch (e: Exception) {
+                        android.util.Log.e("CallManager", "Error handling call state: ${e.message}", e)
+                        // 콜백 오류가 녹음을 중단하지 않도록 예외 처리
+                    }
+                }
             }
+            telephonyCallback = callback
+            telephonyManager?.registerTelephonyCallback(
+                context.mainExecutor, callback
+            )
+            android.util.Log.d("CallManager", "TelephonyCallback registered")
+        } catch (e: Exception) {
+            android.util.Log.e("CallManager", "Failed to register TelephonyCallback: ${e.message}", e)
+            // 등록 실패해도 녹음은 계속 진행
         }
-        telephonyCallback = callback
-        telephonyManager?.registerTelephonyCallback(
-            context.mainExecutor, callback
-        )
     }
 
     @RequiresApi(Build.VERSION_CODES.S)
@@ -115,14 +126,25 @@ class CallManager(private val context: Context) {
 
     @Suppress("DEPRECATION")
     private fun registerPhoneStateListener() {
-        val listener = object : PhoneStateListener() {
-            override fun onCallStateChanged(state: Int, phoneNumber: String?) {
-                _callerNumber.value = phoneNumber ?: ""
-                handleCallState(state)
+        try {
+            val listener = object : PhoneStateListener() {
+                override fun onCallStateChanged(state: Int, phoneNumber: String?) {
+                    try {
+                        _callerNumber.value = phoneNumber ?: ""
+                        handleCallState(state)
+                    } catch (e: Exception) {
+                        android.util.Log.e("CallManager", "Error handling call state: ${e.message}", e)
+                        // 콜백 오류가 녹음을 중단하지 않도록 예외 처리
+                    }
+                }
             }
+            phoneStateListener = listener
+            telephonyManager?.listen(listener, PhoneStateListener.LISTEN_CALL_STATE)
+            android.util.Log.d("CallManager", "PhoneStateListener registered")
+        } catch (e: Exception) {
+            android.util.Log.e("CallManager", "Failed to register PhoneStateListener: ${e.message}", e)
+            // 등록 실패해도 녹음은 계속 진행
         }
-        phoneStateListener = listener
-        telephonyManager?.listen(listener, PhoneStateListener.LISTEN_CALL_STATE)
     }
 
     @Suppress("DEPRECATION")

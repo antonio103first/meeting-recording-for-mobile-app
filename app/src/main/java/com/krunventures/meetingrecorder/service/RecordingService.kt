@@ -69,8 +69,14 @@ class RecordingService : Service() {
             }
             else -> {
                 // 서비스 시작 — WakeLock 획득 및 포그라운드 알림 표시
+                // ⚠️ Android 14+ 요구사항: onStartCommand 진입 후 5초 내에 startForeground() 호출 필수
                 acquireWakeLock()
-                startForeground(NOTIFICATION_ID, buildNotification("녹음 중...", false))
+                try {
+                    startForeground(NOTIFICATION_ID, buildNotification("녹음 중...", false))
+                } catch (e: Exception) {
+                    // Android 12+ foregroundServiceType 미지정 시 예외 발생 가능
+                    android.util.Log.e("RecordingService", "Failed to start foreground: ${e.message}", e)
+                }
             }
         }
         return START_STICKY
@@ -81,6 +87,27 @@ class RecordingService : Service() {
     override fun onDestroy() {
         releaseWakeLock()
         super.onDestroy()
+    }
+
+    /**
+     * 사용자가 최근 앱 목록에서 앱을 스와이프하여 종료했을 때 호출
+     * START_STICKY를 반환하면 시스템이 서비스를 자동 재시작하지만,
+     * 녹음 중인 상태를 ViewModel에 알려야 함
+     */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        // 녹음 중이면 Broadcast로 ViewModel에 알리기
+        sendBroadcast(Intent(RecordingService::class.java.name + ".TASK_REMOVED").setPackage(packageName))
+        // WakeLock은 아직 유지 (서비스가 다시 시작될 때까지)
+    }
+
+    /**
+     * 시스템 저메모리 상태 — 녹음 중이면 일시정지하여 메모리 확보
+     */
+    override fun onLowMemory() {
+        super.onLowMemory()
+        // 녹음 중이면 일시정지 신호 전송
+        sendBroadcast(Intent(RecordingService::class.java.name + ".LOW_MEMORY").setPackage(packageName))
     }
 
     // ── WakeLock 관리 ────────────────────────────────────────────
@@ -124,7 +151,10 @@ class RecordingService : Service() {
             .setOngoing(true)
             .setContentIntent(contentIntent)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
+            // 포그라운드 서비스는 PRIORITY_DEFAULT 이상 권장
+            // PRIORITY_LOW는 시스템 저메모리 상황에서 서비스를 먼저 종료할 수 있음
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .setOnlyAlertOnce(true)
 
         // 일시정지/재개 액션 버튼
@@ -162,13 +192,17 @@ class RecordingService : Service() {
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            // IMPORTANCE_HIGH: 녹음 서비스가 시스템 메모리 부족 상황에서 먼저 종료되는 것을 방지
+            // 포그라운드 서비스는 IMPORTANCE_HIGH 권장 (저메모리 상황에서도 유지)
             val channel = NotificationChannel(
                 CHANNEL_ID, "녹음 서비스",
-                NotificationManager.IMPORTANCE_LOW
+                NotificationManager.IMPORTANCE_HIGH
             ).apply {
-                description = "회의 녹음 진행 중 알림"
+                description = "회의 녹음 진행 중 알림 — 시스템에서 우선 유지됨"
                 setShowBadge(false)
                 lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                // 화면 꺼짐 상태에서도 알림 표시 (포그라운드 서비스 시각화)
+                setBypassDnd(false)
             }
             getSystemService(NotificationManager::class.java)?.createNotificationChannel(channel)
         }

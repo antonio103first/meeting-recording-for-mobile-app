@@ -274,7 +274,7 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
                                     Text("중지", fontSize = 15.sp, fontWeight = FontWeight.Bold)
                                 }
                             }
-                            RecordingState.PAUSED -> {
+                            RecordingState.PAUSED, RecordingState.AUDIO_FOCUS_LOST -> {
                                 FilledTonalButton(
                                     onClick = {
                                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)

@@ -255,6 +255,45 @@ fun MeetingListScreen(viewModel: MeetingListViewModel) {
                             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp),
                                 color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
 
+                            // 파일 위치 정보 표시
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp),
+                                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                            Text("파일 저장 위치", fontWeight = FontWeight.Medium, fontSize = 13.sp,
+                                color = Accent, modifier = Modifier.padding(bottom = 4.dp))
+
+                            // 녹음 파일 경로
+                            if (meeting.mp3LocalPath.isNotBlank()) {
+                                Column(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+                                    Text("🎵 녹음 파일", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = TextDark)
+                                    Text(
+                                        meeting.mp3LocalPath,
+                                        fontSize = 10.sp,
+                                        color = TextLight,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.padding(top = 2.dp)
+                                    )
+                                }
+                            }
+
+                            // 회의록 파일 경로
+                            if (meeting.sttLocalPath.isNotBlank()) {
+                                Column(modifier = Modifier.fillMaxWidth()) {
+                                    Text("📝 회의록 파일", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = TextDark)
+                                    Text(
+                                        meeting.sttLocalPath,
+                                        fontSize = 10.sp,
+                                        color = TextLight,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.padding(top = 2.dp)
+                                    )
+                                }
+                            }
+
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp),
+                                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+
                             // 전체 내용 보기 (요약 + STT 합본)
                             Button(
                                 onClick = {
@@ -300,6 +339,7 @@ fun MeetingListScreen(viewModel: MeetingListViewModel) {
             onRename = { viewModel.showRenameDialog() },
             onDelete = { viewModel.showDeleteDialog() },
             onDeleteFilesOnly = { viewModel.deleteFilesOnly() },
+            onOpenFileLocation = { viewModel.copyFileLocationToClipboard(state.targetMeeting!!) },
             onShare = { viewModel.shareMeeting() },
             onDismiss = { viewModel.dismissActionMenu() }
         )
@@ -592,6 +632,7 @@ private fun ActionMenuDialog(
     onRename: () -> Unit,
     onDelete: () -> Unit,
     onDeleteFilesOnly: () -> Unit,
+    onOpenFileLocation: () -> Unit,
     onShare: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -618,6 +659,21 @@ private fun ActionMenuDialog(
                         Icon(Icons.Filled.Edit, null, modifier = Modifier.size(20.dp), tint = Accent)
                         Spacer(Modifier.width(12.dp))
                         Text("이름 변경", fontSize = 15.sp, color = TextDark)
+                    }
+                }
+
+                // 파일 위치 보기
+                TextButton(
+                    onClick = onOpenFileLocation,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Filled.Folder, null, modifier = Modifier.size(20.dp), tint = Accent)
+                        Spacer(Modifier.width(12.dp))
+                        Column {
+                            Text("파일 위치 복사", fontSize = 15.sp, color = TextDark)
+                            Text("파일이 저장된 경로를 클립보드에 복사", fontSize = 11.sp, color = TextLight)
+                        }
                     }
                 }
 

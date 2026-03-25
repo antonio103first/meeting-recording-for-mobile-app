@@ -192,6 +192,44 @@ class MeetingListViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // === File Location ===
+    /**
+     * Copy file location(s) to clipboard for the current meeting
+     */
+    fun copyFileLocationToClipboard(meeting: Meeting) {
+        val context = getApplication<Application>()
+        val clipboardManager = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+
+        // Build location info with all file paths
+        val locations = buildString {
+            if (meeting.mp3LocalPath.isNotBlank()) {
+                appendLine("🎵 녹음 파일:")
+                appendLine(meeting.mp3LocalPath)
+                appendLine()
+            }
+            if (meeting.sttLocalPath.isNotBlank()) {
+                appendLine("📝 회의록 파일:")
+                appendLine(meeting.sttLocalPath)
+                appendLine()
+            }
+        }.trim()
+
+        if (locations.isNotBlank()) {
+            val clip = android.content.ClipData.newPlainText("파일 위치", locations)
+            clipboardManager.setPrimaryClip(clip)
+            Log.d(TAG, "File locations copied to clipboard:\n$locations")
+            _uiState.value = _uiState.value.copy(
+                showActionMenu = false,
+                statusMessage = "파일 경로가 클립보드에 복사되었습니다"
+            )
+        } else {
+            _uiState.value = _uiState.value.copy(
+                showActionMenu = false,
+                statusMessage = "복사할 파일 경로가 없습니다"
+            )
+        }
+    }
+
     // === Share (공유) ===
     fun shareMeeting() {
         val meeting = _uiState.value.targetMeeting ?: return

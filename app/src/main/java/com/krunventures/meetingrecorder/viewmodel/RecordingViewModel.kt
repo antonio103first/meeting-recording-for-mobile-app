@@ -108,10 +108,29 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
     // 알림바 액션 버튼에서 오는 Broadcast 수신
     private val notificationActionReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            when (intent?.action) {
-                RecordingService.ACTION_PAUSE -> pauseRecording()
-                RecordingService.ACTION_RESUME -> resumeRecording()
-                RecordingService.ACTION_STOP -> stopRecording()
+            try {
+                when (intent?.action) {
+                    RecordingService.ACTION_PAUSE -> pauseRecording()
+                    RecordingService.ACTION_RESUME -> resumeRecording()
+                    RecordingService.ACTION_STOP -> stopRecording()
+                    // 사용자가 최근 앱 목록에서 앱 스와이프 → 녹음파일 즉시 저장
+                    RecordingService::class.java.name + ".TASK_REMOVED" -> {
+                        Log.w(TAG, "App task removed by user. Saving recording immediately.")
+                        currentAudioFile?.let { saveRecordingImmediately(it) }
+                    }
+                    // 시스템 저메모리 상태 → 녹음 일시정지
+                    RecordingService::class.java.name + ".LOW_MEMORY" -> {
+                        Log.w(TAG, "System low memory. Pausing recording to free resources.")
+                        if (_uiState.value.recordingState == RecordingState.RECORDING) {
+                            pauseRecording()
+                            updateUiState { it.copy(
+                                error = "⚠️ 시스템 메모리 부족으로 녹음을 일시정지했습니다. 메모리 정리 후 재개해주세요."
+                            ) }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error in notificationActionReceiver: ${e.message}", e)
             }
         }
     }
@@ -135,6 +154,17 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             recorderManager.amplitude.collect { amp ->
                 _uiState.value = _uiState.value.copy(amplitude = amp)
+            }
+        }
+
+        // 오디오 포커스 손실 감시 — 카메라, 비디오콜 등이 마이크 사용 시
+        viewModelScope.launch {
+            recorderManager.audioFocusLost.collect { focusLost ->
+                if (focusLost) {
+                    updateUiState { it.copy(
+                        error = "⚠️ 다른 앱이 마이크를 사용 중입니다. 카메라, 비디오콜을 종료하면 녹음을 재개할 수 있습니다."
+                    ) }
+                }
             }
         }
 
@@ -194,11 +224,15 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
             addAction(RecordingService.ACTION_PAUSE)
             addAction(RecordingService.ACTION_RESUME)
             addAction(RecordingService.ACTION_STOP)
+            // 서비스 자동 신호
+            addAction(RecordingService::class.java.name + ".TASK_REMOVED")
+            addAction(RecordingService::class.java.name + ".LOW_MEMORY")
         }
         val app = getApplication<MeetingApp>()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             app.registerReceiver(notificationActionReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
         } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
             app.registerReceiver(notificationActionReceiver, filter)
         }
     }

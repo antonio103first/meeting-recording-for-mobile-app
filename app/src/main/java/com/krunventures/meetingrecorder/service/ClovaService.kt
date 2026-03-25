@@ -11,8 +11,8 @@ import java.util.concurrent.TimeUnit
 class ClovaService {
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(600, TimeUnit.SECONDS)  // 긴 녹음 대응 (최대 10분)
-        .writeTimeout(120, TimeUnit.SECONDS)
+        .readTimeout(3600, TimeUnit.SECONDS)  // 3시간 녹음 대응 — CLOVA 서버 처리 최대 1시간 대기
+        .writeTimeout(300, TimeUnit.SECONDS)  // 43MB 업로드 대기 (3시간 녹음@32kbps)
         .build()
     private val gson = Gson()
 
