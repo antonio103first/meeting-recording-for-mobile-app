@@ -123,9 +123,9 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                         Log.w(TAG, "System low memory. Pausing recording to free resources.")
                         if (_uiState.value.recordingState == RecordingState.RECORDING) {
                             pauseRecording()
-                            updateUiState { it.copy(
+                            _uiState.value = _uiState.value.copy(
                                 error = "⚠️ 시스템 메모리 부족으로 녹음을 일시정지했습니다. 메모리 정리 후 재개해주세요."
-                            ) }
+                            )
                         }
                     }
                 }
@@ -994,21 +994,21 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
 
                 // 요약 실행 (선택된 summaryMode로 1회성 실행)
                 val result = when (aiEngine) {
-                    "claude" -> claudeService.summarize(sttText, config.claudeApiKey, summaryMode, onProgress = safeOnProgress)
-                    "chatgpt" -> chatGptService.summarize(sttText, config.chatGptApiKey, summaryMode, onProgress = safeOnProgress)
-                    else -> geminiService.summarize(sttText, config.geminiApiKey, summaryMode, onProgress = safeOnProgress)
+                    "claude" -> claudeService.summarize(sttText, config.claudeApiKey, summaryMode, onProgress = safeOnProgress).let { Pair(it.success, it.text) }
+                    "chatgpt" -> chatGptService.summarize(sttText, config.chatGptApiKey, summaryMode, onProgress = safeOnProgress).let { Pair(it.success, it.text) }
+                    else -> geminiService.summarize(sttText, config.geminiApiKey, summaryMode, onProgress = safeOnProgress).let { Pair(it.success, it.text) }
                 }
 
-                if (!result.success) {
+                if (!result.first) {
                     updateUiState { it.copy(
                         isProcessing = false,
-                        error = "재요약 실패:\n${result.text}"
+                        error = "재요약 실패:\n${result.second}"
                     ) }
                     return@launch
                 }
 
                 // Apply speaker map if available
-                var summaryText = result.text
+                var summaryText = result.second
                 try {
                     val selectedFileName = _uiState.value.selectedSttFile
                     val matchingMeeting = dao.getByFileName(selectedFileName)

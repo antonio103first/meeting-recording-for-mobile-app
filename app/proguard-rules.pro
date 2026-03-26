@@ -38,5 +38,14 @@
 -keep interface okhttp3.** { *; }
 -dontwarn javax.annotation.**
 
+# Suppress R8 missing class warnings for Google API / Apache HTTP dependencies
+-dontwarn javax.naming.**
+-dontwarn org.apache.http.**
+-dontwarn org.apache.http.conn.**
+-dontwarn com.google.auth.**
+-dontwarn com.google.api.client.**
+-dontwarn org.ietf.jgss.**
+-dontwarn com.sun.net.httpserver.**
+
 # Keep BroadcastReceiver
 -keep class * extends android.content.BroadcastReceiver { *; }

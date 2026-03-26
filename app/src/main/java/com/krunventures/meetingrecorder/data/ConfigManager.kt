@@ -99,8 +99,13 @@ class ConfigManager(private val context: Context) {
             val baseDir = recordingDir
             // SAF URI → 실제 파일 경로 변환 후 File API 사용
             val resolvedBase = if (baseDir.startsWith("content://")) {
-                safUriToFilePath(baseDir) ?: defaultBaseDir
-            } else baseDir
+                val resolved = safUriToFilePath(baseDir) ?: defaultBaseDir
+                Log.d(TAG, "audioSaveDir: SAF URI $baseDir resolved to $resolved")
+                resolved
+            } else {
+                Log.d(TAG, "audioSaveDir: Using direct path $baseDir")
+                baseDir
+            }
             return File(resolvedBase, audioSubdir).also {
                 if (!it.exists()) {
                     val created = it.mkdirs()
@@ -114,8 +119,13 @@ class ConfigManager(private val context: Context) {
             val baseDir = recordingDir
             // SAF URI → 실제 파일 경로 변환 후 File API 사용
             val resolvedBase = if (baseDir.startsWith("content://")) {
-                safUriToFilePath(baseDir) ?: defaultBaseDir
-            } else baseDir
+                val resolved = safUriToFilePath(baseDir) ?: defaultBaseDir
+                Log.d(TAG, "summarySaveDir: SAF URI $baseDir resolved to $resolved")
+                resolved
+            } else {
+                Log.d(TAG, "summarySaveDir: Using direct path $baseDir")
+                baseDir
+            }
             return File(resolvedBase, summarySubdir).also {
                 if (!it.exists()) {
                     val created = it.mkdirs()

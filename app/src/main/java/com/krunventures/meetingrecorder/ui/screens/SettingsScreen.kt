@@ -24,7 +24,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.krunventures.meetingrecorder.ui.theme.*
+import com.krunventures.meetingrecorder.viewmodel.SettingsUiState
 import com.krunventures.meetingrecorder.viewmodel.SettingsViewModel
+import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -70,9 +72,9 @@ fun SettingsScreen(viewModel: SettingsViewModel) {
         ) {
             tabs.forEachIndexed { index, title ->
                 Tab(
-                    text = { Text(title, fontSize = 13.sp, fontWeight = FontWeight.Medium) },
                     selected = selectedTab == index,
                     onClick = { selectedTab = index },
+                    text = { Text(title, fontSize = 13.sp, fontWeight = FontWeight.Medium) },
                     unselectedContentColor = TextLight
                 )
             }
@@ -115,13 +117,15 @@ fun SettingsScreen(viewModel: SettingsViewModel) {
 @Composable
 private fun EngineSettingsTab(
     viewModel: SettingsViewModel,
-    state: SettingsViewModel.SettingsUiState
+    state: SettingsUiState
 ) {
     // STT Engine
     Card(colors = CardDefaults.cardColors(containerColor = CardBg), elevation = CardDefaults.cardElevation(2.dp)) {
         Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
             Text("STT 엔진", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = TextDark)
             Spacer(Modifier.height(8.dp))
+            Divider(modifier = Modifier.padding(vertical = 8.dp))
+            Spacer(Modifier.height(4.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 RadioButton(selected = state.sttEngine == "clova", onClick = { viewModel.setSttEngine("clova") })
                 Text("CLOVA", fontSize = 13.sp)
@@ -140,6 +144,8 @@ private fun EngineSettingsTab(
         Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
             Text("요약 엔진", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = TextDark)
             Spacer(Modifier.height(8.dp))
+            Divider(modifier = Modifier.padding(vertical = 8.dp))
+            Spacer(Modifier.height(4.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 RadioButton(selected = state.aiEngine == "gemini", onClick = { viewModel.setAiEngine("gemini") })
                 Text("Gemini", fontSize = 13.sp)
@@ -158,6 +164,8 @@ private fun EngineSettingsTab(
         Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
             Text("요약 방식", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = TextDark)
             Spacer(Modifier.height(8.dp))
+            Divider(modifier = Modifier.padding(vertical = 8.dp))
+            Spacer(Modifier.height(4.dp))
             listOf(
                 "speaker" to "화자 중심", "topic" to "주제 중심",
                 "formal_md" to "회의 양식", "flow" to "흐름 중심",
@@ -176,6 +184,8 @@ private fun EngineSettingsTab(
         Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
             Text("화자 수", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = TextDark)
             Spacer(Modifier.height(8.dp))
+            Divider(modifier = Modifier.padding(vertical = 8.dp))
+            Spacer(Modifier.height(4.dp))
             var numSpeakersText by remember { mutableStateOf(state.numSpeakers.toString()) }
             OutlinedTextField(
                 value = numSpeakersText,
@@ -198,7 +208,7 @@ private fun EngineSettingsTab(
 @Composable
 private fun ApiKeysTab(
     viewModel: SettingsViewModel,
-    state: SettingsViewModel.SettingsUiState
+    state: SettingsUiState
 ) {
     var selectedApiTab by remember { mutableStateOf(0) }
     val apiTabs = listOf("CLOVA", "Gemini", "ChatGPT", "Claude")
@@ -218,9 +228,9 @@ private fun ApiKeysTab(
     ) {
         apiTabs.forEachIndexed { index, title ->
             Tab(
-                text = { Text(title, fontSize = 12.sp) },
                 selected = selectedApiTab == index,
                 onClick = { selectedApiTab = index },
+                text = { Text(title, fontSize = 12.sp) },
                 unselectedContentColor = TextLight
             )
         }
@@ -239,7 +249,7 @@ private fun ApiKeysTab(
 @Composable
 private fun ClovaApiCard(
     viewModel: SettingsViewModel,
-    state: SettingsViewModel.SettingsUiState
+    state: SettingsUiState
 ) {
     Card(colors = CardDefaults.cardColors(containerColor = CardBg), elevation = CardDefaults.cardElevation(2.dp)) {
         Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
@@ -287,7 +297,7 @@ private fun ClovaApiCard(
 @Composable
 private fun GeminiApiCard(
     viewModel: SettingsViewModel,
-    state: SettingsViewModel.SettingsUiState
+    state: SettingsUiState
 ) {
     Card(colors = CardDefaults.cardColors(containerColor = CardBg), elevation = CardDefaults.cardElevation(2.dp)) {
         Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
@@ -325,7 +335,7 @@ private fun GeminiApiCard(
 @Composable
 private fun ChatGptApiCard(
     viewModel: SettingsViewModel,
-    state: SettingsViewModel.SettingsUiState
+    state: SettingsUiState
 ) {
     Card(colors = CardDefaults.cardColors(containerColor = CardBg), elevation = CardDefaults.cardElevation(2.dp)) {
         Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
@@ -364,7 +374,7 @@ private fun ChatGptApiCard(
 @Composable
 private fun ClaudeApiCard(
     viewModel: SettingsViewModel,
-    state: SettingsViewModel.SettingsUiState
+    state: SettingsUiState
 ) {
     Card(colors = CardDefaults.cardColors(containerColor = CardBg), elevation = CardDefaults.cardElevation(2.dp)) {
         Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
@@ -386,8 +396,14 @@ private fun ClaudeApiCard(
                 }
             )
             Spacer(Modifier.height(8.dp))
-            Button(onClick = { viewModel.saveClaudeKey() }, colors = ButtonDefaults.buttonColors(containerColor = Accent)) {
-                Text("저장")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = { viewModel.saveClaudeKey() }, colors = ButtonDefaults.buttonColors(containerColor = Accent)) {
+                    Text("저장")
+                }
+                OutlinedButton(onClick = { viewModel.testClaude() }) { Text("연결 테스트") }
+            }
+            if (state.claudeStatus.isNotEmpty()) {
+                Text(state.claudeStatus, fontSize = 12.sp, color = TextLight, modifier = Modifier.padding(top = 4.dp))
             }
         }
     }
@@ -396,7 +412,7 @@ private fun ClaudeApiCard(
 @Composable
 private fun StorageDriveTab(
     viewModel: SettingsViewModel,
-    state: SettingsViewModel.SettingsUiState,
+    state: SettingsUiState,
     safPickerLauncher: androidx.activity.result.ActivityResultLauncher<android.net.Uri?>,
     signInLauncher: androidx.activity.result.ActivityResultLauncher<android.content.Intent>
 ) {

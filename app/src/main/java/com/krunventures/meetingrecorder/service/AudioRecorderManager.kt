@@ -7,6 +7,7 @@ import android.media.MediaRecorder
 import android.os.Build
 import android.util.Log
 import java.io.File
+import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.*
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -171,7 +172,7 @@ class AudioRecorderManager(private val context: Context) {
                 @Suppress("DEPRECATION")
                 val result = audioManager.requestAudioFocus(
                     audioFocusChangeListener,
-                    AudioManager.STREAM_MIC,
+                    AudioManager.STREAM_VOICE_CALL,
                     AudioManager.AUDIOFOCUS_GAIN
                 )
                 result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED

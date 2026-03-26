@@ -36,6 +36,7 @@ data class SettingsUiState(
     val geminiStatus: String = "",
     val clovaStatus: String = "",
     val chatGptStatus: String = "",
+    val claudeStatus: String = "",
     // Google Drive
     val driveSignedIn: Boolean = false,
     val driveEmail: String = "",
@@ -164,6 +165,18 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
             val result = chatGptService.testConnection(_uiState.value.chatGptApiKey)
             withContext(Dispatchers.Main) {
                 _uiState.value = _uiState.value.copy(chatGptStatus = result.text)
+            }
+        }
+    }
+
+    fun testClaude() {
+        viewModelScope.launch(Dispatchers.IO) {
+            withContext(Dispatchers.Main) {
+                _uiState.value = _uiState.value.copy(claudeStatus = "테스트 중...")
+            }
+            val result = claudeService.testConnection(_uiState.value.claudeApiKey)
+            withContext(Dispatchers.Main) {
+                _uiState.value = _uiState.value.copy(claudeStatus = result.text)
             }
         }
     }
