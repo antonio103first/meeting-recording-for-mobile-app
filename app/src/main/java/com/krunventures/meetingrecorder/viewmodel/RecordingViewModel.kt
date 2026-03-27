@@ -1163,7 +1163,7 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                 ) }
             }
         }
-    }gradle wrapper --gradle-version 8.9
+    }
 
     /**
      * 재요약 관련 상태 초기화
