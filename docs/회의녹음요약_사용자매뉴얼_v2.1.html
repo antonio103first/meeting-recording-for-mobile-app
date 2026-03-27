@@ -1,0 +1,770 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>회의녹음요약 모바일 앱 — 사용자 매뉴얼 v2.1</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;900&display=swap');
+
+  :root {
+    --blue-dark: #1a2744;
+    --blue-mid: #2a3f6e;
+    --blue-light: #3d5a9e;
+    --blue-accent: #7ba4e8;
+    --blue-pale: #b8d4f8;
+    --text-dark: #1a1a2e;
+    --text-mid: #444;
+    --text-light: #666;
+    --bg-white: #ffffff;
+    --bg-light: #f8f9fc;
+    --border-light: #e2e8f0;
+    --green-bg: #e8f5e9;
+    --green-border: #4caf50;
+    --yellow-bg: #fff8e1;
+    --yellow-border: #ff9800;
+    --red-bg: #ffeef0;
+    --red-border: #e53e3e;
+    --info-bg: #e3f2fd;
+    --info-border: #2196f3;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Noto Sans KR', -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: 11pt;
+    line-height: 1.7;
+    color: var(--text-dark);
+    background: #f0f2f5;
+  }
+
+  .page {
+    width: 210mm;
+    min-height: 297mm;
+    margin: 10px auto;
+    background: var(--bg-white);
+    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    position: relative;
+    overflow: hidden;
+  }
+
+  .page-content { padding: 45px 50px 60px 50px; }
+
+  .page-footer {
+    position: absolute;
+    bottom: 20px;
+    left: 0; right: 0;
+    text-align: center;
+    font-size: 8.5pt;
+    color: #999;
+  }
+
+  .page-footer-right {
+    position: absolute;
+    bottom: 20px;
+    right: 50px;
+    font-size: 8.5pt;
+    color: #999;
+  }
+
+  /* ===== COVER ===== */
+  .cover {
+    background: linear-gradient(160deg, var(--blue-dark) 0%, var(--blue-mid) 40%, var(--blue-light) 100%);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    color: white;
+    text-align: center;
+  }
+
+  .cover-badge {
+    display: inline-block;
+    border: 1.5px solid rgba(255,255,255,0.5);
+    border-radius: 30px;
+    padding: 6px 28px;
+    font-size: 10pt;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    margin-bottom: 40px;
+    color: rgba(255,255,255,0.85);
+  }
+
+  .cover-title { font-size: 38pt; font-weight: 900; line-height: 1.2; margin-bottom: 5px; }
+  .cover-subtitle { font-size: 28pt; font-weight: 700; color: var(--blue-pale); margin-bottom: 15px; }
+  .cover-line { width: 60px; height: 3px; background: var(--blue-accent); margin: 25px auto; }
+
+  .cover-tagline {
+    font-size: 11pt;
+    color: rgba(255,255,255,0.75);
+    line-height: 1.8;
+    margin-bottom: 50px;
+  }
+
+  .cover-parts { display: flex; gap: 20px; }
+
+  .cover-part-box {
+    border: 1.5px solid rgba(255,255,255,0.3);
+    border-radius: 10px;
+    padding: 18px 35px;
+    text-align: center;
+    background: rgba(255,255,255,0.05);
+  }
+
+  .cover-part-box strong { display: block; font-size: 11pt; font-weight: 700; margin-bottom: 3px; }
+  .cover-part-box span { font-size: 9.5pt; color: rgba(255,255,255,0.7); }
+  .cover-footer { position: absolute; bottom: 30px; left: 50px; font-size: 8.5pt; color: rgba(255,255,255,0.4); }
+
+  /* ===== TOC ===== */
+  .toc-title { font-size: 24pt; font-weight: 900; color: var(--text-dark); margin-bottom: 8px; }
+  .toc-divider { width: 100%; height: 2px; background: var(--text-dark); margin-bottom: 25px; }
+
+  .toc-part {
+    font-size: 11pt; font-weight: 700; color: var(--blue-light);
+    padding: 6px 12px; background: var(--bg-light);
+    border-left: 3px solid var(--blue-light);
+    margin-bottom: 8px;
+    display: flex; justify-content: space-between;
+  }
+
+  .toc-item {
+    display: flex; justify-content: space-between;
+    padding: 4px 12px 4px 28px;
+    font-size: 10.5pt; color: var(--text-mid);
+    border-bottom: 1px dotted #ddd;
+  }
+
+  .toc-note {
+    margin-top: 20px;
+    background: var(--info-bg);
+    border: 1px solid var(--info-border);
+    border-radius: 6px;
+    padding: 12px 16px;
+    font-size: 9.5pt; color: var(--text-mid);
+  }
+
+  /* ===== PART DIVIDER ===== */
+  .part-divider {
+    background: linear-gradient(160deg, var(--blue-dark) 0%, var(--blue-mid) 50%, var(--blue-light) 100%);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 0 80px;
+    color: white;
+  }
+
+  .part-divider-label { font-size: 11pt; letter-spacing: 3px; color: var(--blue-accent); margin-bottom: 15px; }
+  .part-divider-title { font-size: 32pt; font-weight: 900; margin-bottom: 15px; }
+  .part-divider-desc { font-size: 12pt; font-weight: 300; color: rgba(255,255,255,0.7); }
+
+  /* ===== STEP HEADERS ===== */
+  .step-header {
+    background: linear-gradient(135deg, var(--blue-mid), var(--blue-light));
+    border-radius: 10px;
+    padding: 18px 24px;
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    margin-bottom: 25px;
+    color: white;
+  }
+
+  .step-number { font-size: 28pt; font-weight: 900; min-width: 45px; text-align: center; opacity: 0.9; }
+  .step-info h3 { font-size: 13pt; font-weight: 700; margin-bottom: 2px; }
+  .step-info p { font-size: 9.5pt; font-weight: 300; opacity: 0.8; }
+
+  /* ===== SECTION ===== */
+  .section-header {
+    background: var(--bg-light);
+    border-left: 4px solid var(--blue-light);
+    padding: 10px 16px;
+    margin: 25px 0 15px 0;
+  }
+  .section-header h3 { font-size: 13pt; font-weight: 700; color: var(--text-dark); }
+
+  /* ===== TABLES ===== */
+  table {
+    width: 100%; border-collapse: collapse;
+    margin: 12px 0 20px 0; font-size: 10pt;
+  }
+  table th {
+    background: var(--blue-mid); color: white;
+    padding: 9px 14px; text-align: left; font-weight: 500; font-size: 9.5pt;
+  }
+  table td {
+    padding: 8px 14px; border-bottom: 1px solid var(--border-light); vertical-align: top;
+  }
+  table tr:nth-child(even) td { background: var(--bg-light); }
+  table td strong { color: var(--text-dark); }
+
+  /* ===== BOXES ===== */
+  .box-info { background: var(--info-bg); border: 1px solid var(--info-border); border-radius: 6px; padding: 12px 16px; margin: 12px 0; font-size: 9.5pt; }
+  .box-success { background: var(--green-bg); border: 1px solid var(--green-border); border-radius: 6px; padding: 12px 16px; margin: 12px 0; font-size: 9.5pt; }
+  .box-warning { background: var(--yellow-bg); border: 1px solid var(--yellow-border); border-radius: 6px; padding: 12px 16px; margin: 12px 0; font-size: 9.5pt; }
+  .box-error { background: var(--red-bg); border: 1px solid var(--red-border); border-radius: 6px; padding: 12px 16px; margin: 12px 0; font-size: 9.5pt; }
+
+  .box-dark {
+    background: var(--blue-dark); color: white; border-radius: 6px;
+    padding: 12px 18px; margin: 12px 0;
+    font-family: 'Noto Sans KR', sans-serif; font-size: 10pt; line-height: 1.8;
+  }
+
+  /* ===== CHECKLIST ===== */
+  .checklist {
+    background: var(--bg-light); border: 1px solid var(--border-light);
+    border-radius: 8px; padding: 16px 20px; margin: 12px 0;
+  }
+  .checklist-title { font-weight: 700; font-size: 10.5pt; margin-bottom: 10px; color: var(--text-dark); }
+  .checklist-item { padding: 4px 0; font-size: 10pt; color: var(--text-mid); }
+
+  .steps-list { margin: 10px 0 15px 0; }
+  .steps-list li { margin-left: 22px; padding: 3px 0; font-size: 10.5pt; line-height: 1.7; }
+
+  .sub-section { margin: 18px 0 12px 0; }
+  .sub-title { font-size: 11pt; font-weight: 700; margin-bottom: 8px; color: var(--text-dark); }
+  .sub-title .circle {
+    display: inline-block; width: 20px; height: 20px;
+    background: var(--blue-light); color: white; border-radius: 50%;
+    text-align: center; line-height: 20px; font-size: 9pt; margin-right: 6px;
+  }
+
+  .faq-item { margin-bottom: 16px; }
+  .faq-q { font-weight: 700; font-size: 10.5pt; color: var(--text-dark); margin-bottom: 4px; }
+  .faq-a { font-size: 10pt; color: var(--text-mid); line-height: 1.7; }
+  .faq-divider { border: none; border-top: 1px solid var(--border-light); margin: 14px 0; }
+
+  p { margin-bottom: 10px; font-size: 10.5pt; }
+  code { background: #f0f0f0; padding: 1px 5px; border-radius: 3px; font-family: 'Consolas', monospace; font-size: 9.5pt; }
+
+  @media print {
+    body { background: none; }
+    .page { box-shadow: none; margin: 0; page-break-after: always; width: 100%; min-height: 0; }
+    .page:last-child { page-break-after: avoid; }
+  }
+  @page { size: A4; margin: 0; }
+</style>
+</head>
+<body>
+
+<!-- ===== PAGE 1: COVER ===== -->
+<div class="page cover">
+  <div class="cover-badge">USER GUIDE</div>
+  <div class="cover-title">K-run</div>
+  <div class="cover-subtitle">회의녹음요약 모바일</div>
+  <div style="font-size: 14pt; font-weight: 300; color: rgba(255,255,255,0.85); margin-bottom: 5px;">사용자 매뉴얼 v2.1</div>
+  <div class="cover-line"></div>
+  <div class="cover-tagline">
+    APK 파일을 받아 설치하면 바로 사용할 수 있습니다.<br>
+    이 매뉴얼을 순서대로 따라하면<br>
+    회의 녹음부터 AI 요약, PDF 공유까지 한 번에 가능합니다.
+  </div>
+  <div class="cover-parts">
+    <div class="cover-part-box"><strong>PART 1</strong><span>앱 설치</span></div>
+    <div class="cover-part-box"><strong>PART 2</strong><span>초기 설정</span></div>
+    <div class="cover-part-box"><strong>PART 3</strong><span>사용 가이드</span></div>
+  </div>
+  <div class="cover-footer">케이런벤처스 투자팀 전용 · 2026</div>
+</div>
+
+<!-- ===== PAGE 2: TOC ===== -->
+<div class="page">
+  <div class="page-content">
+    <div class="toc-title">목 차</div>
+    <div class="toc-divider"></div>
+
+    <div style="margin-bottom: 20px;">
+      <div class="toc-part"><span>PART 1 · 앱 설치</span><span>3</span></div>
+      <div class="toc-item"><span>1-1. APK 파일 받기</span><span>4</span></div>
+      <div class="toc-item"><span>1-2. 폰에 설치하기</span><span>4</span></div>
+      <div class="toc-item"><span>1-3. 권한 허용</span><span>4</span></div>
+    </div>
+
+    <div style="margin-bottom: 20px;">
+      <div class="toc-part"><span>PART 2 · 초기 설정</span><span>5</span></div>
+      <div class="toc-item"><span>2-1. API 키 발급 및 입력</span><span>6</span></div>
+      <div class="toc-item"><span>2-2. Google Drive 연동</span><span>7</span></div>
+    </div>
+
+    <div style="margin-bottom: 20px;">
+      <div class="toc-part"><span>PART 3 · 사용 가이드</span><span>8</span></div>
+      <div class="toc-item"><span>3-1. 녹음하기 / 파일 불러오기</span><span>9</span></div>
+      <div class="toc-item"><span>3-2. STT 변환 및 AI 요약</span><span>10</span></div>
+      <div class="toc-item"><span>3-3. 회의록 공유 (PDF / 카카오톡)</span><span>11</span></div>
+      <div class="toc-item"><span>3-4. 파일 관리</span><span>11</span></div>
+      <div class="toc-item"><span>3-5. 자주 묻는 질문</span><span>12</span></div>
+    </div>
+
+    <div class="toc-note">
+      ℹ️ 이 매뉴얼은 <strong>APK 파일을 전달받아 설치하는 사용자</strong>를 위한 가이드입니다.<br>
+      소스코드 빌드가 필요한 경우 <strong>설치 및 사용 매뉴얼(개발자용)</strong>을 참고하세요.
+    </div>
+
+    <div style="margin-top: 40px;">
+      <div class="section-header"><h3>앱 소개</h3></div>
+      <p><strong>회의녹음요약</strong>은 회의·강의 음성을 녹음하거나 오디오 파일을 불러와 <strong>STT 변환 → AI 회의록 요약 → PDF 공유 → Google Drive 자동 업로드</strong>까지 한 번에 처리하는 Android 모바일 앱입니다.</p>
+
+      <table>
+        <tr><th>주요 기능</th><th>설명</th></tr>
+        <tr><td>실시간 녹음</td><td>백그라운드 녹음, 통화 시 자동 일시정지</td></tr>
+        <tr><td>AI 회의록 요약</td><td>Gemini / Claude / ChatGPT, 5가지 요약 방식</td></tr>
+        <tr><td>PDF 공유</td><td>카카오톡 등 메신저로 인쇄 형태 공유</td></tr>
+        <tr><td>Google Drive</td><td>녹음파일·회의록 자동 업로드</td></tr>
+        <tr><td>홈 위젯</td><td>원터치 녹음 시작</td></tr>
+      </table>
+    </div>
+  </div>
+  <div class="page-footer">회의녹음요약 모바일 앱 — 사용자 매뉴얼</div>
+  <div class="page-footer-right">2</div>
+</div>
+
+<!-- ===== PAGE 3: PART 1 DIVIDER ===== -->
+<div class="page part-divider">
+  <div class="part-divider-label">P A R T  1</div>
+  <div class="part-divider-title">앱 설치</div>
+  <div class="part-divider-desc">APK 파일을 받아 폰에 설치합니다. 약 3분 소요됩니다.</div>
+  <div class="page-footer" style="color: rgba(255,255,255,0.3);">회의녹음요약 모바일 앱 — 사용자 매뉴얼</div>
+  <div class="page-footer-right" style="color: rgba(255,255,255,0.3);">3</div>
+</div>
+
+<!-- ===== PAGE 4: APK 설치 ===== -->
+<div class="page">
+  <div class="page-content">
+    <div class="step-header">
+      <div class="step-number">1</div>
+      <div class="step-info">
+        <h3>1-1. APK 파일 받기</h3>
+        <p>담당자로부터 APK 파일을 전달받습니다</p>
+      </div>
+    </div>
+
+    <div class="sub-section">
+      <div class="sub-title"><span class="circle">①</span> 전달 방법</div>
+      <p>아래 중 하나의 방법으로 <strong>MeetingRecorder-v2.1.apk</strong> 파일을 전달받습니다:</p>
+      <table>
+        <tr><th>방법</th><th>설명</th></tr>
+        <tr><td><strong>카카오톡</strong></td><td>담당자가 카카오톡으로 APK 파일 전송</td></tr>
+        <tr><td><strong>이메일</strong></td><td>이메일 첨부파일로 수신</td></tr>
+        <tr><td><strong>Google Drive</strong></td><td>공유 링크로 다운로드</td></tr>
+        <tr><td><strong>GitHub</strong></td><td>github.com/antonio103first/meeting-recording-for-mobile-app → releases 폴더</td></tr>
+      </table>
+    </div>
+
+    <div style="margin-top: 30px;">
+      <div class="step-header">
+        <div class="step-number">2</div>
+        <div class="step-info">
+          <h3>1-2. 폰에 설치하기</h3>
+          <p>전달받은 APK 파일을 열어 설치합니다</p>
+        </div>
+      </div>
+
+      <ol class="steps-list">
+        <li>전달받은 APK 파일을 폰에서 <strong>탭하여 열기</strong></li>
+        <li>"출처를 알 수 없는 앱" 경고가 나타나면 → <strong>"이 소스의 앱 설치 허용"</strong> 활성화</li>
+        <li><strong>설치</strong> 버튼 탭</li>
+        <li>설치 완료 → <strong>열기</strong></li>
+      </ol>
+
+      <div class="box-info">
+        ℹ️ "출처를 알 수 없는 앱" 경고는 Play Store 외부에서 설치하는 앱에 항상 표시됩니다. 사내에서 직접 개발한 앱이므로 안전하게 허용하시면 됩니다.
+      </div>
+    </div>
+
+    <div style="margin-top: 30px;">
+      <div class="step-header">
+        <div class="step-number">3</div>
+        <div class="step-info">
+          <h3>1-3. 권한 허용</h3>
+          <p>앱 최초 실행 시 필요한 권한을 허용합니다</p>
+        </div>
+      </div>
+
+      <p>앱을 처음 실행하면 아래 권한 요청이 나타납니다. 모두 <strong>허용</strong>해주세요:</p>
+      <table>
+        <tr><th>권한</th><th>용도</th><th>필수 여부</th></tr>
+        <tr><td><strong>마이크</strong></td><td>음성 녹음</td><td>필수</td></tr>
+        <tr><td><strong>알림</strong></td><td>녹음 중 상태 표시</td><td>필수</td></tr>
+        <tr><td><strong>전화</strong></td><td>통화 시 자동 일시정지</td><td>권장</td></tr>
+        <tr><td><strong>저장소</strong></td><td>오디오 파일 불러오기</td><td>선택</td></tr>
+      </table>
+
+      <div class="checklist" style="background: var(--green-bg); border-color: var(--green-border); margin-top: 20px;">
+        <div class="checklist-title">✅ 설치 완료 확인</div>
+        <div class="checklist-item">☐ 앱이 정상 실행된다</div>
+        <div class="checklist-item">☐ 하단 탭 3개 표시 (녹음 / 회의목록 / 설정)</div>
+        <div class="checklist-item">☐ 녹음 버튼이 보인다</div>
+      </div>
+    </div>
+  </div>
+  <div class="page-footer">회의녹음요약 모바일 앱 — 사용자 매뉴얼</div>
+  <div class="page-footer-right">4</div>
+</div>
+
+<!-- ===== PAGE 5: PART 2 DIVIDER ===== -->
+<div class="page part-divider">
+  <div class="part-divider-label">P A R T  2</div>
+  <div class="part-divider-title">초기 설정</div>
+  <div class="part-divider-desc">API 키를 입력하고 Google Drive를 연결합니다. 약 10분 소요됩니다.</div>
+  <div class="page-footer" style="color: rgba(255,255,255,0.3);">회의녹음요약 모바일 앱 — 사용자 매뉴얼</div>
+  <div class="page-footer-right" style="color: rgba(255,255,255,0.3);">5</div>
+</div>
+
+<!-- ===== PAGE 6: API 키 입력 ===== -->
+<div class="page">
+  <div class="page-content">
+    <div class="step-header">
+      <div class="step-number">1</div>
+      <div class="step-info">
+        <h3>2-1. API 키 발급 및 입력</h3>
+        <p>STT 변환과 AI 요약에 필요한 API 키를 설정합니다</p>
+      </div>
+    </div>
+
+    <p>앱 하단 <strong>설정</strong> 탭을 열고, 아래 순서대로 API 키를 입력합니다.</p>
+
+    <div class="sub-section">
+      <div class="sub-title"><span class="circle">①</span> 엔진 선택 (설정 탭 최상단)</div>
+      <table>
+        <tr><th>엔진 유형</th><th>권장 선택</th><th>특징</th></tr>
+        <tr><td>STT 엔진</td><td><strong>CLOVA Speech</strong></td><td>한국어 특화, 화자 분리 지원</td></tr>
+        <tr><td>요약 엔진</td><td><strong>Gemini</strong></td><td>무료 한도 넉넉, 자동 모델 감지</td></tr>
+      </table>
+    </div>
+
+    <div class="sub-section">
+      <div class="sub-title"><span class="circle">②</span> CLOVA Speech API (STT — 필수)</div>
+      <ol class="steps-list">
+        <li><strong>console.ncloud.com</strong> 접속 → NAVER Cloud 계정 로그인</li>
+        <li>Services → AI·NAVER API → <strong>CLOVA Speech</strong></li>
+        <li>"이용 신청" → 도메인 생성</li>
+        <li><strong>Invoke URL</strong>과 <strong>Secret Key</strong>를 복사</li>
+        <li>앱 설정 탭 → 해당 항목에 붙여넣기</li>
+      </ol>
+      <div class="box-warning">
+        ⚠️ NAVER Cloud 계정이 없다면 먼저 가입이 필요합니다. 결제 수단 등록 후 이용 가능합니다.
+      </div>
+    </div>
+
+    <div class="sub-section">
+      <div class="sub-title"><span class="circle">③</span> Gemini API (AI 요약 — 권장)</div>
+      <ol class="steps-list">
+        <li><strong>aistudio.google.com/apikey</strong> 접속 → Google 계정 로그인</li>
+        <li>"Create API Key" 클릭 → 키 생성</li>
+        <li>생성된 키를 복사 → 앱 설정 탭에 붙여넣기</li>
+      </ol>
+      <div class="box-success">
+        ✅ Gemini API는 무료 한도 내에서 충분히 사용할 수 있습니다. 별도 결제 등록이 필요 없습니다.
+      </div>
+    </div>
+
+    <div class="sub-section">
+      <div class="sub-title"><span class="circle">④</span> Claude / ChatGPT (선택사항)</div>
+      <table>
+        <tr><th>엔진</th><th>API 키 발급</th><th>비고</th></tr>
+        <tr><td>Claude</td><td>console.anthropic.com → API Keys</td><td>유료</td></tr>
+        <tr><td>ChatGPT</td><td>platform.openai.com → API Keys</td><td>유료</td></tr>
+      </table>
+      <div class="box-info">
+        ℹ️ Gemini만 설정해도 요약 기능을 충분히 사용할 수 있습니다. Claude/ChatGPT는 선택사항입니다.
+      </div>
+    </div>
+  </div>
+  <div class="page-footer">회의녹음요약 모바일 앱 — 사용자 매뉴얼</div>
+  <div class="page-footer-right">6</div>
+</div>
+
+<!-- ===== PAGE 7: Google Drive 연동 ===== -->
+<div class="page">
+  <div class="page-content">
+    <div class="step-header">
+      <div class="step-number">2</div>
+      <div class="step-info">
+        <h3>2-2. Google Drive 연동</h3>
+        <p>녹음파일과 회의록을 자동으로 Google Drive에 업로드합니다</p>
+      </div>
+    </div>
+
+    <div class="sub-section">
+      <div class="sub-title"><span class="circle">①</span> Google Drive 연결</div>
+      <ol class="steps-list">
+        <li>설정 탭 → <strong>Google Drive</strong> 섹션</li>
+        <li>"Google Drive 연결" 버튼 탭</li>
+        <li>Google 계정 선택 → 권한 허용</li>
+        <li>연결 상태가 <strong>"✅ 연결됨 (이메일)"</strong>으로 변경됨을 확인</li>
+      </ol>
+    </div>
+
+    <div class="sub-section">
+      <div class="sub-title"><span class="circle">②</span> 업로드 폴더 설정</div>
+      <ol class="steps-list">
+        <li>"녹음파일 폴더 선택" → Drive 폴더 탐색 → 원하는 폴더 선택</li>
+        <li>"회의록 폴더 선택" → Drive 폴더 탐색 → 원하는 폴더 선택</li>
+      </ol>
+      <div class="box-info">
+        ℹ️ 녹음파일(.m4a)과 회의록(.md)을 각각 다른 폴더로 분리하여 업로드할 수 있습니다. 하위폴더까지 탐색 가능합니다.
+      </div>
+    </div>
+
+    <div class="sub-section">
+      <div class="sub-title"><span class="circle">③</span> 연결 실패 시</div>
+      <table>
+        <tr><th>오류 메시지</th><th>해결 방법</th></tr>
+        <tr><td>사용자가 로그인 취소</td><td>다시 시도</td></tr>
+        <tr><td>Google Play Services 업데이트 필요</td><td>Play Store에서 Google Play Services 업데이트</td></tr>
+        <tr><td>그 외 오류</td><td>담당자(대표이사)에게 문의</td></tr>
+      </table>
+    </div>
+
+    <div class="checklist" style="background: var(--green-bg); border-color: var(--green-border); margin-top: 25px;">
+      <div class="checklist-title">✅ 초기 설정 완료 체크리스트</div>
+      <div class="checklist-item">☐ CLOVA Speech Invoke URL + Secret Key 입력 완료</div>
+      <div class="checklist-item">☐ Gemini API Key 입력 완료</div>
+      <div class="checklist-item">☐ Google Drive 연결됨 표시</div>
+      <div class="checklist-item">☐ 업로드 폴더 선택 완료</div>
+    </div>
+
+    <div class="box-warning" style="margin-top: 15px;">
+      ⚠️ Google Drive 연결은 선택사항입니다. 연결하지 않아도 녹음, STT, 요약, 공유 기능은 모두 정상 작동합니다.
+    </div>
+  </div>
+  <div class="page-footer">회의녹음요약 모바일 앱 — 사용자 매뉴얼</div>
+  <div class="page-footer-right">7</div>
+</div>
+
+<!-- ===== PAGE 8: PART 3 DIVIDER ===== -->
+<div class="page part-divider">
+  <div class="part-divider-label">P A R T  3</div>
+  <div class="part-divider-title">사용 가이드</div>
+  <div class="part-divider-desc">앱의 주요 기능을 단계별로 안내합니다.</div>
+  <div class="page-footer" style="color: rgba(255,255,255,0.3);">회의녹음요약 모바일 앱 — 사용자 매뉴얼</div>
+  <div class="page-footer-right" style="color: rgba(255,255,255,0.3);">8</div>
+</div>
+
+<!-- ===== PAGE 9: 녹음하기 ===== -->
+<div class="page">
+  <div class="page-content">
+    <div class="step-header">
+      <div class="step-number">1</div>
+      <div class="step-info">
+        <h3>3-1. 녹음하기 / 파일 불러오기</h3>
+        <p>회의 음성을 직접 녹음하거나 기존 오디오 파일을 불러옵니다</p>
+      </div>
+    </div>
+
+    <div class="sub-section">
+      <div class="sub-title"><span class="circle">①</span> 실시간 녹음</div>
+      <ol class="steps-list">
+        <li>하단 <strong>녹음</strong> 탭 → 빨간색 <strong>녹음 시작</strong> 버튼 탭</li>
+        <li>파일이름 입력 다이얼로그 → 이름 입력 (선택)</li>
+        <li>녹음 진행 중 화면에 경과 시간 표시</li>
+        <li><strong>일시정지 → 재개 → 정지</strong> 가능</li>
+        <li>정지 시 M4A 파일 자동 저장</li>
+      </ol>
+
+      <div class="box-info">
+        ℹ️ <strong>백그라운드 녹음 지원</strong>: 앱을 닫거나 다른 앱을 사용해도 녹음이 계속됩니다. 상단 알림바에서 상태를 확인할 수 있습니다.
+      </div>
+
+      <div class="box-info">
+        ℹ️ <strong>통화 자동 감지</strong>: 녹음 중 전화가 오면 자동 일시정지, 통화 종료 후 자동 재개됩니다.
+      </div>
+    </div>
+
+    <div class="sub-section">
+      <div class="sub-title"><span class="circle">②</span> 오디오 파일 불러오기</div>
+      <ol class="steps-list">
+        <li>녹음 탭 → <strong>파일 불러오기</strong> 버튼 탭</li>
+        <li>파일 선택기에서 오디오 파일 선택 (MP3, WAV, M4A 지원)</li>
+        <li>선택한 파일이 앱에 등록됩니다</li>
+      </ol>
+    </div>
+
+    <div class="sub-section">
+      <div class="sub-title"><span class="circle">③</span> 홈 위젯 (원터치 녹음)</div>
+      <ol class="steps-list">
+        <li>홈 화면 길게 누르기 → <strong>위젯</strong> → "회의녹음요약" 검색</li>
+        <li>위젯을 홈 화면에 배치</li>
+        <li>위젯 탭 한 번으로 즉시 녹음 시작</li>
+      </ol>
+    </div>
+  </div>
+  <div class="page-footer">회의녹음요약 모바일 앱 — 사용자 매뉴얼</div>
+  <div class="page-footer-right">9</div>
+</div>
+
+<!-- ===== PAGE 10: STT 및 요약 ===== -->
+<div class="page">
+  <div class="page-content">
+    <div class="step-header">
+      <div class="step-number">2</div>
+      <div class="step-info">
+        <h3>3-2. STT 변환 및 AI 요약</h3>
+        <p>녹음 파일을 텍스트로 변환하고 AI가 회의록을 작성합니다</p>
+      </div>
+    </div>
+
+    <div class="sub-section">
+      <div class="sub-title"><span class="circle">①</span> STT 변환 (음성→텍스트)</div>
+      <ol class="steps-list">
+        <li>녹음 정지 후 또는 파일 선택 후 → <strong>STT 변환</strong> 버튼 탭</li>
+        <li>CLOVA Speech 서버에서 음성→텍스트 변환 (화자 분리 포함)</li>
+        <li>변환 시간: 녹음 길이의 약 <strong>1/3 ~ 1/2</strong> 소요</li>
+        <li>변환 완료 시 텍스트가 화면에 표시됩니다</li>
+      </ol>
+    </div>
+
+    <div class="sub-section">
+      <div class="sub-title"><span class="circle">②</span> AI 요약 (5가지 방식 선택)</div>
+      <p>STT 텍스트가 준비되면 <strong>요약 방식</strong>을 선택하고 요약을 실행합니다:</p>
+      <table>
+        <tr><th>요약 방식</th><th>설명</th><th>추천 상황</th></tr>
+        <tr><td><strong>화자 중심</strong></td><td>참석자별 발언 정리</td><td>소규모 미팅, 면담</td></tr>
+        <tr><td><strong>주제 중심</strong></td><td>안건별 내용 기반 요약</td><td>여러 안건 논의 회의</td></tr>
+        <tr><td><strong>공식 양식 (MD)</strong></td><td>마크다운 공식 회의록</td><td>공식 기록 필요 시</td></tr>
+        <tr><td><strong>시간순 흐름</strong></td><td>시간 순서대로 정리</td><td>브레인스토밍, 토론</td></tr>
+        <tr><td><strong>강의 요약</strong></td><td>강의 노트 형태</td><td>강의, 세미나, 교육</td></tr>
+      </table>
+    </div>
+
+    <div class="sub-section">
+      <div class="sub-title"><span class="circle">③</span> 요약 결과 형식</div>
+      <p>모든 요약 방식에 아래 공통 규칙이 적용됩니다:</p>
+      <div class="box-dark">
+        [넘버링 규칙]<br>
+        1 대주제<br>
+        &nbsp;&nbsp;1.1 중주제<br>
+        &nbsp;&nbsp;&nbsp;&nbsp;· 세부사항<br>
+        &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;· 상세내용<br><br>
+        + 회의개요 테이블 (일시, 참석자, 목적) 자동 포함<br>
+        + 핵심 지표 (결정사항, 액션아이템, 주요 일정) 자동 추출
+      </div>
+    </div>
+  </div>
+  <div class="page-footer">회의녹음요약 모바일 앱 — 사용자 매뉴얼</div>
+  <div class="page-footer-right">10</div>
+</div>
+
+<!-- ===== PAGE 11: 공유 및 파일관리 ===== -->
+<div class="page">
+  <div class="page-content">
+    <div class="step-header">
+      <div class="step-number">3</div>
+      <div class="step-info">
+        <h3>3-3. 회의록 공유 (PDF / 카카오톡)</h3>
+        <p>완성된 회의록을 PDF로 변환하여 메신저로 공유합니다</p>
+      </div>
+    </div>
+
+    <ol class="steps-list">
+      <li>하단 <strong>회의목록</strong> 탭 → 공유할 회의 항목의 <strong>메뉴(⋮)</strong> 탭</li>
+      <li><strong>"회의록 공유"</strong> 선택</li>
+      <li>앱이 자동으로 MD → PDF 변환 수행</li>
+      <li>공유 대상 앱 선택 (카카오톡, 이메일, 문자 등)</li>
+      <li>인쇄 형태의 깔끔한 PDF로 전송됩니다</li>
+    </ol>
+
+    <div class="box-success">
+      ✅ 카카오톡에서 PDF 파일을 바로 열어 볼 수 있습니다. 서식이 적용된 인쇄 형태로 공유됩니다.
+    </div>
+
+    <table>
+      <tr><th>공유 항목</th><th>파일 형식</th><th>공유 방법</th></tr>
+      <tr><td>회의록</td><td>.pdf</td><td>메뉴 → 회의록 공유</td></tr>
+      <tr><td>녹음파일</td><td>.m4a</td><td>메뉴 → 녹음파일 공유</td></tr>
+      <tr><td>텍스트</td><td>클립보드</td><td>텍스트 영역 선택 복사</td></tr>
+    </table>
+
+    <div style="margin-top: 30px;">
+      <div class="step-header">
+        <div class="step-number">4</div>
+        <div class="step-info">
+          <h3>3-4. 파일 관리</h3>
+          <p>회의 목록에서 파일을 관리합니다</p>
+        </div>
+      </div>
+
+      <p>회의목록 탭에서 각 항목의 메뉴(⋮)를 탭하면 다양한 관리 기능을 사용할 수 있습니다:</p>
+      <table>
+        <tr><th>기능</th><th>설명</th></tr>
+        <tr><td><strong>이름 변경</strong></td><td>회의 항목 이름 수정</td></tr>
+        <tr><td><strong>녹음파일 공유</strong></td><td>M4A 오디오 파일 공유</td></tr>
+        <tr><td><strong>회의록 공유</strong></td><td>PDF 변환 후 공유</td></tr>
+        <tr><td><strong>파일만 삭제</strong></td><td>파일 삭제, DB 기록은 유지</td></tr>
+        <tr><td><strong>전체 삭제</strong></td><td>파일 + DB 기록 모두 삭제</td></tr>
+      </table>
+
+      <div class="box-info">
+        ℹ️ Google Drive 연결 시, 녹음 완료 및 요약 완료 후 자동으로 지정 폴더에 업로드됩니다.
+      </div>
+    </div>
+  </div>
+  <div class="page-footer">회의녹음요약 모바일 앱 — 사용자 매뉴얼</div>
+  <div class="page-footer-right">11</div>
+</div>
+
+<!-- ===== PAGE 12: FAQ ===== -->
+<div class="page">
+  <div class="page-content">
+    <div class="section-header"><h3>3-5. 자주 묻는 질문</h3></div>
+
+    <div class="faq-item">
+      <div class="faq-q">Q. STT 변환이 너무 오래 걸립니다</div>
+      <div class="faq-a">A. CLOVA Speech는 서버에서 처리하므로 녹음 길이의 약 1/3~1/2 시간이 소요됩니다. 1시간 녹음 시 약 20~30분 소요됩니다. 인터넷 연결 상태를 확인하세요.</div>
+    </div>
+    <hr class="faq-divider">
+
+    <div class="faq-item">
+      <div class="faq-q">Q. 요약 결과가 만족스럽지 않습니다</div>
+      <div class="faq-a">A. 다른 요약 방식으로 다시 시도해보세요. 주제 중심은 안건별 정리에, 화자 중심은 소규모 미팅에 적합합니다. 요약 엔진을 변경(Gemini → Claude 등)해볼 수도 있습니다.</div>
+    </div>
+    <hr class="faq-divider">
+
+    <div class="faq-item">
+      <div class="faq-q">Q. 녹음 중 앱을 닫으면 녹음이 중단되나요?</div>
+      <div class="faq-a">A. 아닙니다. Foreground Service로 동작하므로 앱을 닫아도 녹음이 계속됩니다. 상단 알림바에서 녹음 상태를 확인할 수 있습니다.</div>
+    </div>
+    <hr class="faq-divider">
+
+    <div class="faq-item">
+      <div class="faq-q">Q. Google Drive 업로드가 되지 않습니다</div>
+      <div class="faq-a">A. 설정 탭에서 Drive 연결 상태가 "✅ 연결됨"인지 확인하세요. 업로드 폴더가 선택되어 있어야 합니다. 문제가 계속되면 담당자에게 문의하세요.</div>
+    </div>
+    <hr class="faq-divider">
+
+    <div class="faq-item">
+      <div class="faq-q">Q. API 비용이 얼마나 드나요?</div>
+      <div class="faq-a">A. Gemini API는 무료 한도 내에서 충분히 사용 가능합니다. CLOVA Speech는 NAVER Cloud 종량제로 과금되며, 월 300분 미만이면 소액입니다.</div>
+    </div>
+    <hr class="faq-divider">
+
+    <div class="faq-item">
+      <div class="faq-q">Q. 데이터가 외부로 유출되지 않나요?</div>
+      <div class="faq-a">A. 녹음 파일은 폰 로컬에 저장되고, STT/요약 시에만 API 서버로 전송됩니다. Google Drive 업로드는 본인 계정으로만 이루어집니다.</div>
+    </div>
+    <hr class="faq-divider">
+
+    <div class="faq-item">
+      <div class="faq-q">Q. 앱 업데이트는 어떻게 하나요?</div>
+      <div class="faq-a">A. 담당자로부터 새 APK 파일을 전달받아 동일하게 설치하면 됩니다. 기존 데이터(녹음, 회의록, API 키)는 유지됩니다.</div>
+    </div>
+    <hr class="faq-divider">
+
+    <div class="faq-item">
+      <div class="faq-q">Q. iPhone에서도 사용할 수 있나요?</div>
+      <div class="faq-a">A. 현재 Android 전용입니다. iOS 버전은 지원되지 않습니다.</div>
+    </div>
+
+    <div style="margin-top: 30px; text-align: center; color: var(--text-light); font-size: 9.5pt;">
+      <hr style="border: none; border-top: 2px solid var(--border-light); margin-bottom: 15px;">
+      문의: 대표이사 (antonio103@gmail.com)<br>
+      GitHub: github.com/antonio103first/meeting-recording-for-mobile-app<br><br>
+      <strong>K-Run Ventures</strong> · 2026
+    </div>
+  </div>
+  <div class="page-footer">회의녹음요약 모바일 앱 — 사용자 매뉴얼</div>
+  <div class="page-footer-right">12</div>
+</div>
+
+</body>
+</html>
