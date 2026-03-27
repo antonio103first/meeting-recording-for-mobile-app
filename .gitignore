@@ -28,3 +28,9 @@ google-services.json
 Thumbs.db
 *.swp
 *~
+
+# releases 폴더 APK 허용
+!releases/*.apk
+
+# releases 폴더 APK 허용
+!releases/*.apk
