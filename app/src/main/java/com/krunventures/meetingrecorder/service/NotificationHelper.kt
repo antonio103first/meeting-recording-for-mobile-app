@@ -51,7 +51,7 @@ object NotificationHelper {
             ).apply {
                 description = CHANNEL_DESC
                 enableVibration(true)
-                setShowBadge(true)
+                setShowBadge(false)
             }
             val nm = context.getSystemService(NotificationManager::class.java)
             nm?.createNotificationChannel(channel)

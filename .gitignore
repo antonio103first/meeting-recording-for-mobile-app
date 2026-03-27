@@ -1,17 +1,30 @@
+# Android Studio / IntelliJ
 *.iml
-.gradle
-/local.properties
 /.idea
 .DS_Store
+
+# Gradle
+.gradle
 /build
-/captures
-.externalNativeBuild
-.cxx
-local.properties
 /app/build
 /app/release
-*.apk
-*.aab
+/captures
+
+# Local config (API keys, signing)
+local.properties
+google-services.json
 *.jks
 *.keystore
-google-services.json
+
+# Build outputs
+*.apk
+*.aab
+
+# Native build
+.externalNativeBuild
+.cxx
+
+# OS files
+Thumbs.db
+*.swp
+*~

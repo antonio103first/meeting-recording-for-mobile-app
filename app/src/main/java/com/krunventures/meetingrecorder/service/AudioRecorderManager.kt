@@ -86,6 +86,12 @@ class AudioRecorderManager(private val context: Context) {
         if (_state.value != RecordingState.IDLE) {
             return Result.failure(Exception("이미 녹음 중입니다."))
         }
+        // 마이크 권한 사전 확인
+        if (androidx.core.content.ContextCompat.checkSelfPermission(
+                context, android.Manifest.permission.RECORD_AUDIO
+            ) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            return Result.failure(Exception("마이크 권한이 허용되지 않았습니다.\n\n설정 → 앱 → 회의녹음요약 → 권한 → 마이크 → 허용"))
+        }
         return try {
             // Step 1: 오디오 포커스 요청 (카메라, 비디오콜 등과 충돌 감지)
             val focusAcquired = requestAudioFocus()
@@ -143,7 +149,15 @@ class AudioRecorderManager(private val context: Context) {
             _state.value = RecordingState.IDLE
             releaseMediaRecorder()
             abandonAudioFocus()
-            Result.failure(Exception("마이크 오류: ${e.message}"))
+            // 에러 유형 구분: 파일 접근 에러 vs 마이크 에러
+            val errorMsg = when {
+                e.message?.contains("EPERM") == true || e.message?.contains("Permission denied") == true ->
+                    "파일 저장 경로 접근 불가 (EPERM).\n저장 폴더를 기본값으로 변경하거나 앱 전용 폴더를 사용해주세요.\n\n경로: ${saveDir.absolutePath}"
+                e.message?.contains("파일 저장") == true -> e.message!!
+                e.message?.contains("마이크") == true -> e.message!!
+                else -> "녹음 시작 오류: ${e.message}"
+            }
+            Result.failure(Exception(errorMsg))
         }
     }
 

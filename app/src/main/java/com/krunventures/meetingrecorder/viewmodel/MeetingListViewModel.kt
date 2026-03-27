@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.krunventures.meetingrecorder.util.MdToPdfConverter
 import org.json.JSONObject
 import java.io.File
 
@@ -230,66 +231,192 @@ class MeetingListViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    // === Share (공유) ===
-    fun shareMeeting() {
+    // === Copy to Clipboard (복사) ===
+
+    /**
+     * 회의록 요약 + STT 원문을 클립보드에 복사
+     */
+    fun copyMeetingTextToClipboard() {
         val meeting = _uiState.value.targetMeeting ?: return
-        _uiState.value = _uiState.value.copy(showActionMenu = false)
-
         val context = getApplication<Application>()
-        val filesToShare = mutableListOf<File>()
+        val clipboardManager = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
 
-        // 회의록 파일 우선 공유
-        if (meeting.summaryLocalPath.isNotBlank()) {
-            val f = File(meeting.summaryLocalPath)
-            if (f.exists()) filesToShare.add(f)
-        }
-        if (meeting.mp3LocalPath.isNotBlank()) {
-            val f = File(meeting.mp3LocalPath)
-            if (f.exists()) filesToShare.add(f)
-        }
+        val text = buildString {
+            appendLine("=== ${meeting.fileName} ===")
+            appendLine("작성일: ${meeting.createdAt}")
+            appendLine()
+            if (meeting.summaryText.isNotBlank()) {
+                appendLine("## 회의록 요약")
+                appendLine(meeting.summaryText)
+                appendLine()
+            }
+            if (meeting.sttText.isNotBlank()) {
+                appendLine("---")
+                appendLine("## STT 변환 원문")
+                appendLine(meeting.sttText)
+            }
+        }.trim()
 
-        if (filesToShare.isEmpty()) {
-            _uiState.value = _uiState.value.copy(statusMessage = "공유할 파일이 없습니다.")
-            return
+        if (text.isNotBlank()) {
+            val clip = android.content.ClipData.newPlainText("회의록", text)
+            clipboardManager.setPrimaryClip(clip)
+            _uiState.value = _uiState.value.copy(
+                showActionMenu = false,
+                statusMessage = "회의록이 클립보드에 복사되었습니다"
+            )
+        } else {
+            _uiState.value = _uiState.value.copy(
+                showActionMenu = false,
+                statusMessage = "복사할 내용이 없습니다"
+            )
         }
+    }
+
+    // === Share (공유) ===
+
+    /**
+     * 파일 형태별 공유
+     * @param format "plain_text" | "md_file" | "txt_file" | "with_audio"
+     */
+    fun shareByFormat(format: String) {
+        val meeting = _uiState.value.targetMeeting ?: return
+        _uiState.value = _uiState.value.copy(showShareSheet = false)
+        val context = getApplication<Application>()
 
         try {
-            val uris = filesToShare.map { file ->
-                FileProvider.getUriForFile(
-                    context,
-                    "${context.packageName}.fileprovider",
-                    file
-                )
-            }
-
-            val intent = if (uris.size == 1) {
-                Intent(Intent.ACTION_SEND).apply {
-                    type = when (filesToShare[0].extension.lowercase()) {
-                        "md" -> "text/markdown"
-                        "txt" -> "text/plain"
-                        else -> "audio/*"
+            when (format) {
+                "plain_text" -> {
+                    // Plain text — 텍스트 내용을 직접 공유 (파일 첨부 없음)
+                    val text = buildString {
+                        appendLine("=== ${meeting.fileName} ===")
+                        appendLine()
+                        appendLine("## 회의록 요약")
+                        appendLine(meeting.summaryText.ifEmpty { "(없음)" })
                     }
-                    putExtra(Intent.EXTRA_STREAM, uris[0])
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    val intent = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_SUBJECT, meeting.fileName)
+                        putExtra(Intent.EXTRA_TEXT, text)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    context.startActivity(Intent.createChooser(intent, "텍스트 공유").apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    })
                 }
-            } else {
-                Intent(Intent.ACTION_SEND_MULTIPLE).apply {
-                    type = "*/*"
-                    putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(uris))
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-            }
 
-            val chooser = Intent.createChooser(intent, "회의 파일 공유").apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                "md_file" -> {
+                    // 회의록 PDF 공유 — MD→HTML→PDF 변환 (카카오톡 호환, 프린트 형태)
+                    val tempDir = File(context.cacheDir, "share_temp")
+                    tempDir.mkdirs()
+                    val baseName = meeting.fileName.ifEmpty { "회의록" }
+                        .removeSuffix(".m4a").removeSuffix(".mp3").removeSuffix(".md").removeSuffix(".txt")
+
+                    // 원본 파일이 있으면 그 내용 사용, 없으면 DB summaryText 사용
+                    val mdContent = if (meeting.summaryLocalPath.isNotBlank()) {
+                        val srcFile = File(meeting.summaryLocalPath)
+                        if (srcFile.exists()) srcFile.readText(Charsets.UTF_8)
+                        else meeting.summaryText.ifEmpty { "(요약 없음)" }
+                    } else {
+                        meeting.summaryText.ifEmpty { "(요약 없음)" }
+                    }
+
+                    val pdfFile = File(tempDir, "${baseName}_회의록.pdf")
+                    val success = MdToPdfConverter.convert(context, mdContent, pdfFile, baseName)
+                    if (success) {
+                        shareFileIntent(context, pdfFile, "application/pdf", "${baseName}_회의록.pdf")
+                    } else {
+                        // PDF 변환 실패 시 .txt 폴백
+                        Log.w(TAG, "PDF 변환 실패, txt 폴백")
+                        val txtFile = File(tempDir, "${baseName}_회의록.txt").apply {
+                            writeText(mdContent, Charsets.UTF_8)
+                        }
+                        shareFileIntent(context, txtFile, "text/plain", meeting.fileName)
+                    }
+                }
+
+                "txt_file" -> {
+                    // .txt 파일 공유 — 회의록 요약을 텍스트 파일로 첨부
+                    val tempDir = File(context.cacheDir, "share_temp")
+                    tempDir.mkdirs()
+                    val baseName = meeting.fileName.ifEmpty { "회의록" }
+                    val txtFile = File(tempDir, "${baseName}.txt").apply {
+                        writeText(buildString {
+                            appendLine("[ ${meeting.fileName} ]")
+                            appendLine("작성일: ${meeting.createdAt}")
+                            appendLine()
+                            appendLine(meeting.summaryText.ifEmpty { "(요약 없음)" })
+                        }, Charsets.UTF_8)
+                    }
+                    shareFileIntent(context, txtFile, "text/plain", meeting.fileName)
+                }
+
+                "with_audio" -> {
+                    // 녹음포함 — 회의록 .md + 녹음 .m4a/.mp3 파일 함께 공유
+                    val filesToShare = mutableListOf<File>()
+
+                    // 회의록 파일
+                    if (meeting.summaryLocalPath.isNotBlank()) {
+                        val f = File(meeting.summaryLocalPath)
+                        if (f.exists()) filesToShare.add(f)
+                    } else if (meeting.summaryText.isNotBlank()) {
+                        val tempDir = File(context.cacheDir, "share_temp")
+                        tempDir.mkdirs()
+                        val baseName = meeting.fileName.ifEmpty { "회의록" }
+                        filesToShare.add(File(tempDir, "${baseName}.md").apply {
+                            writeText(meeting.summaryText, Charsets.UTF_8)
+                        })
+                    }
+
+                    // 녹음 파일
+                    if (meeting.mp3LocalPath.isNotBlank()) {
+                        val f = File(meeting.mp3LocalPath)
+                        if (f.exists()) filesToShare.add(f)
+                    }
+
+                    if (filesToShare.isEmpty()) {
+                        _uiState.value = _uiState.value.copy(statusMessage = "공유할 파일이 없습니다.")
+                        return
+                    }
+
+                    val uris = filesToShare.map { file ->
+                        FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+                    }
+
+                    val intent = if (uris.size == 1) {
+                        Intent(Intent.ACTION_SEND).apply {
+                            type = "*/*"
+                            putExtra(Intent.EXTRA_STREAM, uris[0])
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                    } else {
+                        Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+                            type = "*/*"
+                            putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(uris))
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                    }
+                    context.startActivity(Intent.createChooser(intent, "회의 파일 공유").apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    })
+                }
             }
-            context.startActivity(chooser)
         } catch (e: Exception) {
-            Log.e(TAG, "Share failed", e)
+            Log.e(TAG, "Share failed (format=$format)", e)
             _uiState.value = _uiState.value.copy(statusMessage = "공유 실패: ${e.message?.take(100)}")
         }
+    }
+
+    private fun shareFileIntent(context: Application, file: File, mimeType: String, title: String) {
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = mimeType
+            putExtra(Intent.EXTRA_SUBJECT, title)
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(Intent.createChooser(intent, "파일 공유").apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        })
     }
 
     // === Delete only files (keep DB record) ===
@@ -417,36 +544,4 @@ class MeetingListViewModel(app: Application) : AndroidViewModel(app) {
         _uiState.value = _uiState.value.copy(showShareSheet = false)
     }
 
-    fun getShareText(meeting: Meeting, shareTarget: String): String {
-        return when (shareTarget) {
-            "summary" -> {
-                buildString {
-                    appendLine("=== 회의록 요약 ===")
-                    appendLine(meeting.fileName)
-                    appendLine()
-                    append(meeting.summaryText.ifEmpty { "(없음)" })
-                }
-            }
-            "stt" -> {
-                buildString {
-                    appendLine("=== STT 변환 원문 ===")
-                    appendLine(meeting.fileName)
-                    appendLine()
-                    append(meeting.sttText.ifEmpty { "(없음)" })
-                }
-            }
-            "all" -> {
-                buildString {
-                    appendLine("=== ${meeting.fileName} ===")
-                    appendLine()
-                    appendLine("## 회의록 요약")
-                    appendLine(meeting.summaryText.ifEmpty { "(없음)" })
-                    appendLine()
-                    appendLine("## STT 변환 원문")
-                    append(meeting.sttText.ifEmpty { "(없음)" })
-                }
-            }
-            else -> ""
-        }
-    }
 }

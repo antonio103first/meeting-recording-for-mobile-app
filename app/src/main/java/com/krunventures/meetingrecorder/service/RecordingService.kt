@@ -3,6 +3,7 @@ package com.krunventures.meetingrecorder.service
 import android.app.*
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
@@ -28,6 +29,9 @@ class RecordingService : Service() {
         const val ACTION_PAUSE = "com.krunventures.meetingrecorder.ACTION_PAUSE"
         const val ACTION_RESUME = "com.krunventures.meetingrecorder.ACTION_RESUME"
         const val ACTION_STOP = "com.krunventures.meetingrecorder.ACTION_STOP"
+
+        // 포그라운드 서비스 준비 완료 신호 (startForeground 성공 후 발송)
+        const val ACTION_FOREGROUND_READY = "com.krunventures.meetingrecorder.ACTION_FOREGROUND_READY"
 
         // 알림 업데이트 인텐트
         const val ACTION_UPDATE_NOTIFICATION = "com.krunventures.meetingrecorder.ACTION_UPDATE_NOTIFICATION"
@@ -70,12 +74,29 @@ class RecordingService : Service() {
             else -> {
                 // 서비스 시작 — WakeLock 획득 및 포그라운드 알림 표시
                 // ⚠️ Android 14+ 요구사항: onStartCommand 진입 후 5초 내에 startForeground() 호출 필수
+                // ⚠️ Android 14+ (API 34+): startForeground()에 FOREGROUND_SERVICE_TYPE_MICROPHONE 명시 필수
                 acquireWakeLock()
                 try {
-                    startForeground(NOTIFICATION_ID, buildNotification("녹음 중...", false))
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        // Android 10+: foregroundServiceType MICROPHONE 명시 (14+에서 필수)
+                        startForeground(
+                            NOTIFICATION_ID,
+                            buildNotification("녹음 중...", false),
+                            ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                        )
+                    } else {
+                        startForeground(NOTIFICATION_ID, buildNotification("녹음 중...", false))
+                    }
+                    android.util.Log.d("RecordingService", "✅ startForeground(MICROPHONE) 성공")
+                    // ★ 포그라운드 상태 진입 성공 → ViewModel에 녹음 시작 허가 신호
+                    sendBroadcast(Intent(ACTION_FOREGROUND_READY).setPackage(packageName))
                 } catch (e: Exception) {
-                    // Android 12+ foregroundServiceType 미지정 시 예외 발생 가능
-                    android.util.Log.e("RecordingService", "Failed to start foreground: ${e.message}", e)
+                    android.util.Log.e("RecordingService", "❌ startForeground 실패: ${e.message}", e)
+                    // 실패 시에도 신호 전송 (ViewModel에서 에러 처리)
+                    sendBroadcast(Intent(ACTION_FOREGROUND_READY).apply {
+                        setPackage(packageName)
+                        putExtra("error", e.message)
+                    })
                 }
             }
         }

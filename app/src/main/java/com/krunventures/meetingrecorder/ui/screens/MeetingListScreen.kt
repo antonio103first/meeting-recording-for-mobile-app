@@ -1,8 +1,6 @@
 package com.krunventures.meetingrecorder.ui.screens
 
-import android.content.ClipboardManager
 import android.content.Context
-import android.content.Intent
 import android.webkit.WebView
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
@@ -336,11 +334,10 @@ fun MeetingListScreen(viewModel: MeetingListViewModel) {
     if (state.showActionMenu && state.targetMeeting != null) {
         ActionMenuDialog(
             meeting = state.targetMeeting!!,
+            onCopy = { viewModel.copyMeetingTextToClipboard() },
             onRename = { viewModel.showRenameDialog() },
             onDelete = { viewModel.showDeleteDialog() },
             onDeleteFilesOnly = { viewModel.deleteFilesOnly() },
-            onOpenFileLocation = { viewModel.copyFileLocationToClipboard(state.targetMeeting!!) },
-            onShare = { viewModel.shareMeeting() },
             onDismiss = { viewModel.dismissActionMenu() }
         )
     }
@@ -624,16 +621,15 @@ private fun inlineMd(text: String): String {
 }
 
 /**
- * 파일 관리 액션 메뉴 다이얼로그
+ * ⋮ 메뉴 — 이름변경 + 파일삭제
  */
 @Composable
 private fun ActionMenuDialog(
     meeting: Meeting,
+    onCopy: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit,
     onDeleteFilesOnly: () -> Unit,
-    onOpenFileLocation: () -> Unit,
-    onShare: () -> Unit,
     onDismiss: () -> Unit
 ) {
     AlertDialog(
@@ -650,6 +646,21 @@ private fun ActionMenuDialog(
                 Text(meeting.createdAt, fontSize = 12.sp, color = TextLight)
                 Spacer(Modifier.height(12.dp))
 
+                // 복사 (클립보드)
+                TextButton(
+                    onClick = onCopy,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Filled.ContentCopy, null, modifier = Modifier.size(20.dp), tint = Accent)
+                        Spacer(Modifier.width(12.dp))
+                        Column {
+                            Text("회의록 복사", fontSize = 15.sp, color = TextDark)
+                            Text("요약 + STT 원문을 클립보드에 복사", fontSize = 11.sp, color = TextLight)
+                        }
+                    }
+                }
+
                 // 이름 변경
                 TextButton(
                     onClick = onRename,
@@ -659,33 +670,6 @@ private fun ActionMenuDialog(
                         Icon(Icons.Filled.Edit, null, modifier = Modifier.size(20.dp), tint = Accent)
                         Spacer(Modifier.width(12.dp))
                         Text("이름 변경", fontSize = 15.sp, color = TextDark)
-                    }
-                }
-
-                // 파일 위치 보기
-                TextButton(
-                    onClick = onOpenFileLocation,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Filled.Folder, null, modifier = Modifier.size(20.dp), tint = Accent)
-                        Spacer(Modifier.width(12.dp))
-                        Column {
-                            Text("파일 위치 복사", fontSize = 15.sp, color = TextDark)
-                            Text("파일이 저장된 경로를 클립보드에 복사", fontSize = 11.sp, color = TextLight)
-                        }
-                    }
-                }
-
-                // 공유
-                TextButton(
-                    onClick = onShare,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Filled.Share, null, modifier = Modifier.size(20.dp), tint = Accent)
-                        Spacer(Modifier.width(12.dp))
-                        Text("공유 (카카오톡, 메일 등)", fontSize = 15.sp, color = TextDark)
                     }
                 }
 
@@ -779,8 +763,8 @@ private fun SpeakerNameDialog(
 }
 
 /**
- * Share Bottom Sheet
- * Allows selecting share target (summary, stt, all) and share method (KakaoTalk, Email, Copy)
+ * Share Bottom Sheet — 파일 형태 선택
+ * Plain text / .md 파일 / .txt 파일 / 녹음포함(회의록 md + mp3)
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -789,8 +773,6 @@ private fun ShareBottomSheet(
     viewModel: MeetingListViewModel,
     onDismiss: () -> Unit
 ) {
-    val context = LocalContext.current
-    var shareTarget by remember { mutableStateOf("all") }
     val sheetState = rememberModalBottomSheetState()
 
     ModalBottomSheet(
@@ -800,129 +782,59 @@ private fun ShareBottomSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp)
+                .padding(horizontal = 16.dp, vertical = 12.dp)
         ) {
-            Text("공유 방법 선택", fontWeight = FontWeight.Bold, fontSize = 16.sp, modifier = Modifier.padding(bottom = 12.dp))
+            Text(
+                "공유할 파일 형태 선택",
+                fontWeight = FontWeight.Bold, fontSize = 16.sp,
+                modifier = Modifier.padding(bottom = 4.dp)
+            )
+            Text(
+                meeting.fileName.ifEmpty { "제목 없음" },
+                fontSize = 13.sp, color = TextLight,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(bottom = 16.dp)
+            )
 
-            // Share target selection
-            Text("공유 대상", fontWeight = FontWeight.Medium, fontSize = 13.sp, color = Accent, modifier = Modifier.padding(bottom = 8.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                ShareTargetCheckbox(
-                    label = "요약",
-                    selected = shareTarget == "summary",
-                    onClick = { shareTarget = "summary" },
-                    modifier = Modifier.weight(1f)
-                )
-                ShareTargetCheckbox(
-                    label = "원문",
-                    selected = shareTarget == "stt",
-                    onClick = { shareTarget = "stt" },
-                    modifier = Modifier.weight(1f)
-                )
-                ShareTargetCheckbox(
-                    label = "전체",
-                    selected = shareTarget == "all",
-                    onClick = { shareTarget = "all" },
-                    modifier = Modifier.weight(1f)
-                )
-            }
-
-            HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp), color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
-
-            // Share methods
-            Text("공유 방법", fontWeight = FontWeight.Medium, fontSize = 13.sp, color = Accent, modifier = Modifier.padding(bottom = 8.dp))
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                // KakaoTalk
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                // 1) Plain text
                 Button(
-                    onClick = {
-                        val text = viewModel.getShareText(meeting, shareTarget)
-                        val intent = Intent().apply {
-                            action = Intent.ACTION_SEND
-                            type = "text/plain"
-                            putExtra(Intent.EXTRA_TEXT, text)
-                            setPackage("com.kakao.talk")
-                        }
-                        try {
-                            context.startActivity(Intent.createChooser(intent, "카카오톡"))
-                            onDismiss()
-                        } catch (e: Exception) {
-                            android.util.Log.e("ShareSheet", "KakaoTalk not installed", e)
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFE812))
-                ) {
-                    Text("💬 카카오톡", color = Color.Black)
-                }
-
-                // Email
-                Button(
-                    onClick = {
-                        val text = viewModel.getShareText(meeting, shareTarget)
-                        val intent = Intent(Intent.ACTION_SENDTO).apply {
-                            data = android.net.Uri.parse("mailto:")
-                            putExtra(Intent.EXTRA_SUBJECT, meeting.fileName)
-                            putExtra(Intent.EXTRA_TEXT, text)
-                        }
-                        try {
-                            context.startActivity(Intent.createChooser(intent, "이메일"))
-                            onDismiss()
-                        } catch (e: Exception) {
-                            android.util.Log.e("ShareSheet", "Email client not available", e)
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth(),
+                    onClick = { viewModel.shareByFormat("plain_text") },
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = Accent)
                 ) {
-                    Text("✉️ 이메일")
+                    Text("📝  Plain Text", fontSize = 14.sp)
                 }
 
-                // Copy to clipboard
+                // 2) .md 파일
                 Button(
-                    onClick = {
-                        val text = viewModel.getShareText(meeting, shareTarget)
-                        val clipboardManager = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        val clip = android.content.ClipData.newPlainText("회의 내용", text)
-                        clipboardManager.setPrimaryClip(clip)
-                        android.widget.Toast.makeText(context, "복사되었습니다", android.widget.Toast.LENGTH_SHORT).show()
-                        onDismiss()
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color.Gray)
+                    onClick = { viewModel.shareByFormat("md_file") },
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Accent)
                 ) {
-                    Text("📋 복사")
+                    Text("📄  회의록 (.md 파일)", fontSize = 14.sp)
+                }
+
+                // 3) .txt 파일
+                Button(
+                    onClick = { viewModel.shareByFormat("txt_file") },
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Accent)
+                ) {
+                    Text("📃  회의록 (.txt 파일)", fontSize = 14.sp)
+                }
+
+                // 4) 녹음포함 (회의록 md + mp3)
+                Button(
+                    onClick = { viewModel.shareByFormat("with_audio") },
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF5C6BC0))
+                ) {
+                    Text("🎵  녹음포함 (회의록 + MP3)", fontSize = 14.sp)
                 }
             }
 
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(20.dp))
         }
-    }
-}
-
-/**
- * Share Target Selection Checkbox
- */
-@Composable
-private fun ShareTargetCheckbox(
-    label: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Button(
-        onClick = onClick,
-        modifier = modifier.height(40.dp),
-        colors = ButtonDefaults.buttonColors(
-            containerColor = if (selected) Accent else Color.LightGray
-        )
-    ) {
-        Text(
-            label,
-            fontSize = 12.sp,
-            color = if (selected) Color.White else TextDark
-        )
     }
 }

@@ -2,9 +2,13 @@
 <paths>
     <!-- 앱 전용 외부 저장소 (Documents/Meeting recording/) -->
     <external-files-path name="documents" path="Documents/" />
+    <!-- 앱 전용 외부 저장소 (Music/recording_temp/) — 녹음 임시 파일 -->
+    <external-files-path name="music" path="Music/" />
+    <!-- 앱 전용 외부 저장소 루트 (모든 하위 경로 접근 가능) -->
+    <external-files-path name="external_root" path="." />
     <!-- 내부 저장소 폴백 -->
     <files-path name="internal" path="." />
-    <!-- 캐시 디렉토리 (녹음 임시 파일) -->
+    <!-- 캐시 디렉토리 (공유 임시 파일) -->
     <cache-path name="cache" path="." />
     <external-cache-path name="external_cache" path="." />
 </paths>

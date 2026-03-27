@@ -240,17 +240,69 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
     // ── 녹음 제어 ────────────────────────────────────────────────
 
     fun startRecording() {
-        val result = recorderManager.startRecording(config.audioSaveDir)
-        result.onSuccess { file ->
-            currentAudioFile = file
-            _uiState.value = _uiState.value.copy(currentFile = file.name)
-            // 포그라운드 서비스 시작
-            startService()
-            // 전화 상태 모니터링 시작
-            callManager.startMonitoring()
+        // ★ Android 14+ (targetSdk 34+): 포그라운드 서비스가 먼저 실행되어야 마이크 접근 가능
+        // 1) 서비스 시작 요청
+        // 2) 서비스가 startForeground(MICROPHONE) 완료 후 FOREGROUND_READY 브로드캐스트 발송
+        // 3) 수신 후 녹음 시작 — 딜레이 기반 방식보다 확실하게 동기화
+        callManager.startMonitoring()
+
+        // 포그라운드 Ready 수신 BroadcastReceiver 등록
+        val foregroundReadyReceiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(context: android.content.Context?, intent: android.content.Intent?) {
+                // 즉시 등록 해제 (1회성)
+                try { getApplication<MeetingApp>().unregisterReceiver(this) } catch (_: Exception) {}
+
+                val error = intent?.getStringExtra("error")
+                if (error != null) {
+                    Log.e(TAG, "Foreground service failed: $error")
+                    _uiState.value = _uiState.value.copy(error = "포그라운드 서비스 시작 실패: $error")
+                    stopService()
+                    callManager.stopMonitoring()
+                    return
+                }
+
+                Log.d(TAG, "✅ Foreground READY 수신 — 녹음 시작")
+                viewModelScope.launch {
+                    // ★ 녹음은 항상 앱 전용 임시 디렉토리에서 수행 (SAF 폴더는 File API 직접 쓰기 불가)
+                    // 녹음 완료 후 saveRecordingImmediately()에서 사용자 선택 폴더로 복사
+                    val result = recorderManager.startRecording(config.tempRecordingDir)
+                    result.onSuccess { file ->
+                        currentAudioFile = file
+                        _uiState.value = _uiState.value.copy(currentFile = file.name)
+                    }
+                    result.onFailure { e ->
+                        _uiState.value = _uiState.value.copy(error = e.message)
+                        stopService()
+                        callManager.stopMonitoring()
+                    }
+                }
+            }
         }
-        result.onFailure { e ->
-            _uiState.value = _uiState.value.copy(error = e.message)
+
+        // BroadcastReceiver 등록
+        val filter = android.content.IntentFilter(RecordingService.ACTION_FOREGROUND_READY)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            getApplication<MeetingApp>().registerReceiver(
+                foregroundReadyReceiver, filter, android.content.Context.RECEIVER_NOT_EXPORTED
+            )
+        } else {
+            getApplication<MeetingApp>().registerReceiver(foregroundReadyReceiver, filter)
+        }
+
+        // 서비스 시작 (startForeground 완료 후 FOREGROUND_READY 브로드캐스트 발송됨)
+        startService()
+
+        // 타임아웃 안전장치: 3초 내 READY 신호 미수신 시 정리
+        viewModelScope.launch {
+            kotlinx.coroutines.delay(3000)
+            try { getApplication<MeetingApp>().unregisterReceiver(foregroundReadyReceiver) } catch (_: Exception) {}
+            // 녹음이 시작되지 않았으면 에러 처리
+            if (recorderManager.state.value == RecordingState.IDLE && _uiState.value.currentFile == null) {
+                Log.e(TAG, "Foreground ready timeout (3s)")
+                _uiState.value = _uiState.value.copy(error = "녹음 시작 실패: 포그라운드 서비스 응답 없음\n\n설정 → 앱 → 회의녹음요약 → 알림 → 허용 확인")
+                stopService()
+                callManager.stopMonitoring()
+            }
         }
     }
 
@@ -302,6 +354,9 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
 
                     // 알림 표시
                     NotificationHelper.notifyRecordingSaved(getApplication(), savedFile.name)
+
+                    // ★ SAF 복사는 confirmFileName()에서 최종 이름 확정 후 한 번만 실행
+                    // (여기서 임시이름으로 SAF 복사하면 중복 파일 생성됨)
 
                     // 2) Google Drive 업로드 (녹음파일만 먼저)
                     if (config.driveAutoUpload) {
@@ -418,8 +473,8 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
     fun setAudioFileFromUri(uri: Uri) {
         val context = getApplication<MeetingApp>()
         val inputStream = context.contentResolver.openInputStream(uri) ?: return
-        val tempFile = File(config.audioSaveDir, "imported_${System.currentTimeMillis()}.m4a")
-        config.audioSaveDir.mkdirs()
+        val tempFile = File(config.tempRecordingDir, "imported_${System.currentTimeMillis()}.m4a")
+        config.tempRecordingDir.mkdirs()
         tempFile.outputStream().use { inputStream.copyTo(it) }
         currentAudioFile = tempFile
         _uiState.value = _uiState.value.copy(currentFile = tempFile.name)
@@ -626,23 +681,37 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                     null  // 재요약 모드: 오디오 파일 없음
                 }
 
-                // Step 5: Save files (통합 파일: 회의록요약 + STT변환)
-                val combinedFile = try {
-                    fileManager.saveCombinedSummary(summaryText, sttText, config.summarySaveDir, fileName)
+                // Step 5: Save files separately (STT파일 + 회의록파일)
+                updateUiState { it.copy(saveStatus = "📝 STT/회의록 파일 저장 중...") }
+
+                val sttDir = config.sttSaveDir
+                Log.d(TAG, "STT save dir: ${sttDir.absolutePath} (exists=${sttDir.exists()}, writable=${sttDir.canWrite()})")
+                val sttFile = try {
+                    fileManager.saveSttText(sttText, sttDir, fileName)
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed to save combined summary file", e)
+                    Log.e(TAG, "Failed to save STT file to ${sttDir.absolutePath}", e)
                     Result.failure(e)
                 }
-                Log.d(TAG, "Combined summary file saved: ${combinedFile.getOrNull()?.absolutePath}")
+                Log.d(TAG, "STT file saved: ${sttFile.getOrNull()?.absolutePath} (exists=${sttFile.getOrNull()?.exists()})")
 
-                // Step 6: Save to DB (최종 경로 반영)
+                val summaryDir = config.summarySaveDir
+                Log.d(TAG, "Summary save dir: ${summaryDir.absolutePath} (exists=${summaryDir.exists()}, writable=${summaryDir.canWrite()})")
+                val summaryFile = try {
+                    fileManager.saveSummaryText(summaryText, summaryDir, fileName)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to save summary file to ${summaryDir.absolutePath}", e)
+                    Result.failure(e)
+                }
+                Log.d(TAG, "Summary file saved: ${summaryFile.getOrNull()?.absolutePath} (exists=${summaryFile.getOrNull()?.exists()})")
+
+                // Step 6: Save to DB (최종 경로 반영 — STT와 요약 경로 분리)
                 try {
                     dao.insert(Meeting(
                         createdAt = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date()),
                         fileName = finalAudioFile?.name ?: fileName,  // null check for resummarize mode
                         mp3LocalPath = finalAudioFile?.absolutePath ?: "",  // empty path for resummarize
-                        sttLocalPath = combinedFile.getOrNull()?.absolutePath ?: "",
-                        summaryLocalPath = combinedFile.getOrNull()?.absolutePath ?: "",
+                        sttLocalPath = sttFile.getOrNull()?.absolutePath ?: "",
+                        summaryLocalPath = summaryFile.getOrNull()?.absolutePath ?: "",
                         sttText = sttText,
                         summaryText = summaryText,
                         fileSizeMb = if (finalAudioFile != null) fileManager.getFileSizeMb(finalAudioFile) else 0.0
@@ -652,18 +721,56 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                     Log.e(TAG, "DB insert failed", e)
                 }
 
-                // Step 7: Google Drive 자동 업로드 (회의록 파일만 — 녹음파일은 stopRecording에서 이미 업로드)
+                // Step 6.5: SAF 사용자 선택 폴더로 복사 (앱 전용 디렉토리 → 사용자 폴더)
+                val safResults = mutableListOf<String>()
+                try {
+                    val audioSafUri = config.getSafUriForAudio()
+                    val sttSafUri = config.getSafUriForStt()
+                    val summarySafUri = config.getSafUriForSummary()
+                    val hasSafConfig = audioSafUri.isNotBlank() || sttSafUri.isNotBlank() || summarySafUri.isNotBlank()
+
+                    if (hasSafConfig) {
+                        // 녹음파일 SAF 복사
+                        if (audioSafUri.isNotBlank() && finalAudioFile != null) {
+                            val ok = config.copyFileToSafDir(finalAudioFile, audioSafUri)
+                            safResults.add(if (ok) "✅녹음" else "❌녹음")
+                            Log.d(TAG, "SAF audio copy: $ok (${finalAudioFile.name})")
+                        }
+                        // STT파일 SAF 복사
+                        if (sttSafUri.isNotBlank()) {
+                            sttFile.getOrNull()?.let { f ->
+                                val ok = config.copyFileToSafDir(f, sttSafUri)
+                                safResults.add(if (ok) "✅STT" else "❌STT")
+                                Log.d(TAG, "SAF stt copy: $ok (${f.name})")
+                            }
+                        }
+                        // 회의록(요약)파일 SAF 복사
+                        if (summarySafUri.isNotBlank()) {
+                            summaryFile.getOrNull()?.let { f ->
+                                val ok = config.copyFileToSafDir(f, summarySafUri)
+                                safResults.add(if (ok) "✅회의록" else "❌회의록")
+                                Log.d(TAG, "SAF summary copy: $ok (${f.name})")
+                            }
+                        }
+                        Log.d(TAG, "SAF copy results: ${safResults.joinToString()}")
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "SAF copy failed", e)
+                    safResults.add("❌오류: ${e.message?.take(50)}")
+                }
+
+                // Step 7: Google Drive 자동 업로드 (STT + 회의록 파일 — 녹음파일은 stopRecording에서 이미 업로드)
                 if (config.driveAutoUpload) {
                     try {
-                        updateUiState { it.copy(saveStatus = "☁ 회의록 Drive 업로드 중...") }
+                        updateUiState { it.copy(saveStatus = "☁ 문서 Drive 업로드 중...") }
                         val driveService = GoogleDriveService(getApplication())
                         if (driveService.initFromLastAccount()) {
                             val txtFolderId = config.driveTxtFolderId
                             if (txtFolderId.isNotBlank()) {
                                 val results = driveService.uploadMeetingFiles(
                                     mp3File = null,
-                                    sttFile = null,
-                                    summaryFile = combinedFile.getOrNull(),
+                                    sttFile = sttFile.getOrNull(),
+                                    summaryFile = summaryFile.getOrNull(),
                                     mp3FolderId = "",
                                     txtFolderId = txtFolderId
                                 )
@@ -673,8 +780,9 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                                     }
                                 }
                                 Log.d(TAG, "Drive upload results: $uploadStatus")
+                                val safStatus = if (safResults.isNotEmpty()) " | 지정폴더: ${safResults.joinToString(" ")}" else ""
                                 updateUiState { it.copy(
-                                    saveStatus = "✅ 저장 완료 + Drive 업로드 ($uploadStatus)",
+                                    saveStatus = "✅ 저장 완료 + Drive ($uploadStatus)$safStatus",
                                     isProcessing = false
                                 ) }
                             } else {
@@ -697,8 +805,9 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                         ) }
                     }
                 } else {
+                    val safStatus = if (safResults.isNotEmpty()) " | 지정폴더: ${safResults.joinToString(" ")}" else ""
                     updateUiState { it.copy(
-                        saveStatus = "✅ 저장 완료 — ${config.summarySaveDir.absolutePath}",
+                        saveStatus = "✅ 저장 완료$safStatus",
                         isProcessing = false
                     ) }
                 }
@@ -1054,7 +1163,7 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                 ) }
             }
         }
-    }
+    }gradle wrapper --gradle-version 8.9
 
     /**
      * 재요약 관련 상태 초기화

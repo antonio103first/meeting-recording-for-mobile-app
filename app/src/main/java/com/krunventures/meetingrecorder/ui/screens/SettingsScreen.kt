@@ -38,17 +38,54 @@ fun SettingsScreen(viewModel: SettingsViewModel) {
     val signInLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
-            viewModel.handleSignInResult(result.data)
-        }
+        // resultCode 무관하게 항상 전달 — 에러 코드 진단을 위해
+        viewModel.handleSignInResult(result.data)
     }
 
-    // SAF (Storage Access Framework) folder picker launcher
-    val safPickerLauncher = rememberLauncherForActivityResult(
+    // SAF (Storage Access Framework) folder picker launchers
+    // ★ Android 11+: takePersistableUriPermission() 필수 — 앱 재시작 후에도 접근 권한 유지
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val safBasePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
     ) { uri ->
         if (uri != null) {
+            context.contentResolver.takePersistableUriPermission(
+                uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
             viewModel.setUserSelectedBaseDir(uri.toString())
+        }
+    }
+
+    val safAudioPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri != null) {
+            context.contentResolver.takePersistableUriPermission(
+                uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+            viewModel.setUserSelectedAudioDir(uri.toString())
+        }
+    }
+
+    val safSttPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri != null) {
+            context.contentResolver.takePersistableUriPermission(
+                uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+            viewModel.setUserSelectedSttDir(uri.toString())
+        }
+    }
+
+    val safSummaryPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri != null) {
+            context.contentResolver.takePersistableUriPermission(
+                uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+            viewModel.setUserSelectedSummaryDir(uri.toString())
         }
     }
 
@@ -91,7 +128,7 @@ fun SettingsScreen(viewModel: SettingsViewModel) {
             when (selectedTab) {
                 0 -> EngineSettingsTab(viewModel, state)
                 1 -> ApiKeysTab(viewModel, state)
-                2 -> StorageDriveTab(viewModel, state, safPickerLauncher, signInLauncher)
+                2 -> StorageDriveTab(viewModel, state, safBasePickerLauncher, safAudioPickerLauncher, safSttPickerLauncher, safSummaryPickerLauncher, signInLauncher)
             }
             Spacer(Modifier.height(80.dp))
         }
@@ -413,26 +450,99 @@ private fun ClaudeApiCard(
 private fun StorageDriveTab(
     viewModel: SettingsViewModel,
     state: SettingsUiState,
-    safPickerLauncher: androidx.activity.result.ActivityResultLauncher<android.net.Uri?>,
+    safBasePickerLauncher: androidx.activity.result.ActivityResultLauncher<android.net.Uri?>,
+    safAudioPickerLauncher: androidx.activity.result.ActivityResultLauncher<android.net.Uri?>,
+    safSttPickerLauncher: androidx.activity.result.ActivityResultLauncher<android.net.Uri?>,
+    safSummaryPickerLauncher: androidx.activity.result.ActivityResultLauncher<android.net.Uri?>,
     signInLauncher: androidx.activity.result.ActivityResultLauncher<android.content.Intent>
 ) {
-    // Local Storage Path
+    // Local Storage Path — Separate Folders (v2.0)
     Card(colors = CardDefaults.cardColors(containerColor = CardBg), elevation = CardDefaults.cardElevation(2.dp)) {
         Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
-            Text("📁 로컬 저장소", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = TextDark)
+            Text("📁 로컬 저장소 (폴더 분리)", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = TextDark)
             Divider(modifier = Modifier.padding(vertical = 8.dp))
 
-            Text("현재 경로:", fontWeight = FontWeight.Medium, fontSize = 13.sp)
-            Text(state.audioSaveDir, fontSize = 12.sp, color = TextLight, modifier = Modifier.padding(top = 4.dp))
-            Spacer(Modifier.height(12.dp))
+            // Audio folder
+            Text("🎵 녹음파일 (MP3) 폴더", fontWeight = FontWeight.Medium, fontSize = 13.sp, color = TextDark)
+            if (state.safAudioDisplayPath.isNotEmpty()) {
+                Text("📂 ${state.safAudioDisplayPath}", fontSize = 12.sp, color = Accent, modifier = Modifier.padding(top = 4.dp))
+            } else {
+                Text(state.audioSaveDir, fontSize = 12.sp, color = TextLight, modifier = Modifier.padding(top = 4.dp))
+            }
+            Button(
+                onClick = { safAudioPickerLauncher.launch(null) },
+                colors = ButtonDefaults.buttonColors(containerColor = Accent),
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+            ) {
+                Icon(Icons.Filled.Folder, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("폴더 선택", fontSize = 13.sp)
+            }
+            if (state.userSelectedAudioDir.isNotEmpty()) {
+                Text("✅ 커스텀 경로 설정됨", fontSize = 11.sp, color = Success, modifier = Modifier.padding(top = 4.dp))
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            // STT folder
+            Text("📝 STT 변환 폴더", fontWeight = FontWeight.Medium, fontSize = 13.sp, color = TextDark)
+            if (state.safSttDisplayPath.isNotEmpty()) {
+                Text("📂 ${state.safSttDisplayPath}", fontSize = 12.sp, color = Accent, modifier = Modifier.padding(top = 4.dp))
+            } else {
+                Text(state.sttSaveDir, fontSize = 12.sp, color = TextLight, modifier = Modifier.padding(top = 4.dp))
+            }
+            Button(
+                onClick = { safSttPickerLauncher.launch(null) },
+                colors = ButtonDefaults.buttonColors(containerColor = Accent),
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+            ) {
+                Icon(Icons.Filled.Folder, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("폴더 선택", fontSize = 13.sp)
+            }
+            if (state.userSelectedSttDir.isNotEmpty()) {
+                Text("✅ 커스텀 경로 설정됨", fontSize = 11.sp, color = Success, modifier = Modifier.padding(top = 4.dp))
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            // Summary folder
+            Text("📋 회의록 (요약) 폴더", fontWeight = FontWeight.Medium, fontSize = 13.sp, color = TextDark)
+            if (state.safSummaryDisplayPath.isNotEmpty()) {
+                Text("📂 ${state.safSummaryDisplayPath}", fontSize = 12.sp, color = Accent, modifier = Modifier.padding(top = 4.dp))
+            } else {
+                Text(state.summarySaveDir, fontSize = 12.sp, color = TextLight, modifier = Modifier.padding(top = 4.dp))
+            }
+            Button(
+                onClick = { safSummaryPickerLauncher.launch(null) },
+                colors = ButtonDefaults.buttonColors(containerColor = Accent),
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+            ) {
+                Icon(Icons.Filled.Folder, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("폴더 선택", fontSize = 13.sp)
+            }
+            if (state.userSelectedSummaryDir.isNotEmpty()) {
+                Text("✅ 커스텀 경로 설정됨", fontSize = 11.sp, color = Success, modifier = Modifier.padding(top = 4.dp))
+            }
+        }
+    }
+
+    // Legacy Base Directory Picker (fallback)
+    Card(colors = CardDefaults.cardColors(containerColor = CardBg), elevation = CardDefaults.cardElevation(2.dp)) {
+        Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+            Text("📁 기본 저장소 (레거시)", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = TextDark)
+            Divider(modifier = Modifier.padding(vertical = 8.dp))
+            Text("위의 폴더 분리 설정을 사용할 것을 권장합니다.", fontSize = 12.sp, color = TextLight)
+            Spacer(Modifier.height(8.dp))
 
             Button(
-                onClick = { safPickerLauncher.launch(null) },
+                onClick = { safBasePickerLauncher.launch(null) },
                 colors = ButtonDefaults.buttonColors(containerColor = Accent)
             ) {
                 Icon(Icons.Filled.Folder, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
-                Text("폴더 선택 (SAF)", fontSize = 13.sp)
+                Text("기본 폴더 선택", fontSize = 13.sp)
             }
 
             if (state.userSelectedBaseDir.isNotEmpty()) {

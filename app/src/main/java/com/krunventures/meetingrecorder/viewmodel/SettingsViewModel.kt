@@ -31,8 +31,15 @@ data class SettingsUiState(
     val summaryMode: String = "speaker",
     val numSpeakers: Int = 2,
     val audioSaveDir: String = "",
+    val sttSaveDir: String = "",
     val summarySaveDir: String = "",
     val userSelectedBaseDir: String = "",
+    val userSelectedAudioDir: String = "",
+    val userSelectedSttDir: String = "",
+    val userSelectedSummaryDir: String = "",
+    val safAudioDisplayPath: String = "",
+    val safSttDisplayPath: String = "",
+    val safSummaryDisplayPath: String = "",
     val geminiStatus: String = "",
     val clovaStatus: String = "",
     val chatGptStatus: String = "",
@@ -75,8 +82,15 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         summaryMode = config.summaryMode,
         numSpeakers = config.numSpeakers,
         audioSaveDir = config.audioSaveDir.absolutePath,
+        sttSaveDir = config.sttSaveDir.absolutePath,
         summarySaveDir = config.summarySaveDir.absolutePath,
         userSelectedBaseDir = config.userSelectedBaseDir,
+        userSelectedAudioDir = config.userSelectedAudioDir,
+        userSelectedSttDir = config.userSelectedSttDir,
+        userSelectedSummaryDir = config.userSelectedSummaryDir,
+        safAudioDisplayPath = config.safUriToDisplayPath(config.getSafUriForAudio()),
+        safSttDisplayPath = config.safUriToDisplayPath(config.getSafUriForStt()),
+        safSummaryDisplayPath = config.safUriToDisplayPath(config.getSafUriForSummary()),
         driveSignedIn = driveService.isSignedIn(),
         driveEmail = driveService.getAccountEmail(),
         driveAutoUpload = config.driveAutoUpload,
@@ -129,7 +143,35 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         _uiState.value = _uiState.value.copy(
             userSelectedBaseDir = uri,
             audioSaveDir = config.audioSaveDir.absolutePath,
+            sttSaveDir = config.sttSaveDir.absolutePath,
             summarySaveDir = config.summarySaveDir.absolutePath
+        )
+    }
+
+    fun setUserSelectedAudioDir(uri: String) {
+        config.userSelectedAudioDir = uri
+        _uiState.value = _uiState.value.copy(
+            userSelectedAudioDir = uri,
+            audioSaveDir = config.audioSaveDir.absolutePath,
+            safAudioDisplayPath = config.safUriToDisplayPath(uri)
+        )
+    }
+
+    fun setUserSelectedSttDir(uri: String) {
+        config.userSelectedSttDir = uri
+        _uiState.value = _uiState.value.copy(
+            userSelectedSttDir = uri,
+            sttSaveDir = config.sttSaveDir.absolutePath,
+            safSttDisplayPath = config.safUriToDisplayPath(uri)
+        )
+    }
+
+    fun setUserSelectedSummaryDir(uri: String) {
+        config.userSelectedSummaryDir = uri
+        _uiState.value = _uiState.value.copy(
+            userSelectedSummaryDir = uri,
+            summarySaveDir = config.summarySaveDir.absolutePath,
+            safSummaryDisplayPath = config.safUriToDisplayPath(uri)
         )
     }
 
@@ -187,8 +229,16 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     fun handleSignInResult(data: Intent?) {
         viewModelScope.launch {
             try {
+                if (data == null) {
+                    Log.e(TAG, "Google Sign-In: data intent is null — 사용자가 취소했거나 Google Play Services 오류")
+                    _uiState.value = _uiState.value.copy(
+                        driveStatus = "❌ 로그인 취소 또는 Google Play Services 오류"
+                    )
+                    return@launch
+                }
                 val task = GoogleSignIn.getSignedInAccountFromIntent(data)
                 val account: GoogleSignInAccount = task.getResult(ApiException::class.java)
+                Log.d(TAG, "Google Sign-In 성공: ${account.email}, grantedScopes=${account.grantedScopes}")
                 val success = driveService.handleSignInResult(account)
                 if (success) {
                     _uiState.value = _uiState.value.copy(
@@ -199,14 +249,27 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
                     // 기본 폴더 자동 생성
                     initDefaultDriveFolders()
                 } else {
+                    Log.e(TAG, "Drive 서비스 초기화 실패 — account=${account.email}")
                     _uiState.value = _uiState.value.copy(
-                        driveStatus = "❌ Drive 서비스 초기화 실패"
+                        driveStatus = "❌ Drive 서비스 초기화 실패 — Google Cloud Console에서 Drive API 활성화를 확인해주세요."
                     )
                 }
             } catch (e: ApiException) {
-                Log.e(TAG, "Google Sign-In failed: ${e.statusCode}", e)
+                Log.e(TAG, "Google Sign-In failed: statusCode=${e.statusCode}, message=${e.message}", e)
+                val detail = when (e.statusCode) {
+                    12500 -> "Google Play Services 업데이트 필요"
+                    12501 -> "사용자가 로그인 취소"
+                    12502 -> "로그인 진행 중 — 잠시 후 다시 시도"
+                    10 -> "개발자 오류 — SHA-1 지문 또는 패키지명 불일치 (Google Cloud Console 확인 필요)"
+                    else -> "오류 코드: ${e.statusCode}"
+                }
                 _uiState.value = _uiState.value.copy(
-                    driveStatus = "❌ 로그인 실패 (코드: ${e.statusCode})"
+                    driveStatus = "❌ 로그인 실패: $detail"
+                )
+            } catch (e: Exception) {
+                Log.e(TAG, "Google Sign-In unexpected error", e)
+                _uiState.value = _uiState.value.copy(
+                    driveStatus = "❌ 예상치 못한 오류: ${e.message?.take(100)}"
                 )
             }
         }
