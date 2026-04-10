@@ -50,7 +50,8 @@ data class RecordingUiState(
     val selectedSttText: String = "",  // loaded STT text content
     val showResummarizeSheet: Boolean = false,  // show/hide summary mode BottomSheet
     val resummarizeProgress: Int = 0,  // progress for resummarize
-    val resummarizeStatus: String = ""  // status for resummarize
+    val resummarizeStatus: String = "",  // status for resummarize
+    val safNotConfigured: Boolean = false  // SAF 저장 폴더 미설정 경고
 )
 
 class RecordingViewModel(app: Application) : AndroidViewModel(app) {
@@ -59,6 +60,14 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private val config = ConfigManager(app)
+
+    /** SAF 저장 폴더가 하나라도 설정되어 있는지 확인 */
+    private fun hasSafConfigured(): Boolean {
+        return config.getSafUriForAudio().isNotBlank()
+                || config.getSafUriForStt().isNotBlank()
+                || config.getSafUriForSummary().isNotBlank()
+    }
+
     private val recorderManager = AudioRecorderManager(app)
     private val callManager = CallManager(app)
     private val clovaService = ClovaService()
@@ -140,6 +149,11 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
         registerNotificationReceiver()
         checkPreviousCrashLog()
 
+        // SAF 저장 폴더 미설정 경고 — 앱 시작 시 체크
+        if (!hasSafConfigured()) {
+            _uiState.value = _uiState.value.copy(safNotConfigured = true)
+        }
+
         // Observe recorder state
         viewModelScope.launch {
             recorderManager.state.collect { state ->
@@ -168,44 +182,31 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
 
-        // Observe call state — 녹음 중 전화가 오면 자동 일시정지/재개
+        // ★ v3.0: 녹음 중 전화 수신 시에도 녹음 계속 진행 (인터럽트 완전 차단)
+        // 전화 상태만 UI에 표시하고, 녹음은 절대 일시정지하지 않음
         viewModelScope.launch {
             callManager.callState.collect { callState ->
-                val currentRecState = _uiState.value.recordingState
-                val wasAutoPaused = _uiState.value.callAutoPaused
-
                 when (callState) {
                     CallState.RINGING -> {
-                        // 녹음 중에 전화가 오면 UI에 수락/거절 표시
                         _uiState.value = _uiState.value.copy(
                             callState = callState,
                             callerNumber = callManager.callerNumber.value
                         )
+                        Log.d(TAG, "v3.0: 전화 수신 — 녹음 계속 진행")
                     }
                     CallState.IN_CALL -> {
-                        // 통화 수락 → 녹음 자동 일시정지
-                        if (currentRecState == RecordingState.RECORDING) {
-                            recorderManager.pauseRecording()
-                            updateServiceNotification("통화 중 — 녹음 일시정지", true)
-                            _uiState.value = _uiState.value.copy(
-                                callState = callState, callAutoPaused = true
-                            )
-                        } else {
-                            _uiState.value = _uiState.value.copy(callState = callState)
-                        }
+                        // ★ v3.0: 통화 수락해도 녹음 계속 (일시정지 안 함)
+                        _uiState.value = _uiState.value.copy(callState = callState)
+                        Log.d(TAG, "v3.0: 통화 중 — 녹음 계속 진행")
                     }
                     CallState.CALL_ENDED -> {
-                        // 통화 종료 → 자동 일시정지였으면 녹음 재개
-                        if (wasAutoPaused && currentRecState == RecordingState.PAUSED) {
-                            recorderManager.resumeRecording()
-                            updateServiceNotification("녹음 중...", false)
-                        }
                         _uiState.value = _uiState.value.copy(
                             callState = CallState.NONE,
                             callAutoPaused = false,
                             callerNumber = ""
                         )
                         callManager.resetCallState()
+                        Log.d(TAG, "v3.0: 통화 종료")
                     }
                     CallState.NONE -> {
                         _uiState.value = _uiState.value.copy(
@@ -681,9 +682,24 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                     null  // 재요약 모드: 오디오 파일 없음
                 }
 
+                // ★ 오디오 파일 SAF 직접 저장 (설정된 경우)
+                var audioSafSaved = false
+                val audioSafUri = config.getSafUriForAudio()
+                if (audioSafUri.isNotBlank() && finalAudioFile != null) {
+                    val safResult = config.writeFileToSafDir(finalAudioFile, audioSafUri)
+                    audioSafSaved = safResult != null
+                    Log.d(TAG, "Audio SAF direct save: $audioSafSaved (uri=$safResult)")
+                }
+
                 // Step 5: Save files separately (STT파일 + 회의록파일)
+                // ★ SAF 폴더가 설정되어 있으면 SAF에 직접 저장 + 앱 전용 디렉토리에도 백업
                 updateUiState { it.copy(saveStatus = "📝 STT/회의록 파일 저장 중...") }
 
+                val sttSafUri = config.getSafUriForStt()
+                val summarySafUri = config.getSafUriForSummary()
+
+                // ── STT 파일 저장 ──
+                // 1) 앱 전용 디렉토리에 항상 백업 저장
                 val sttDir = config.sttSaveDir
                 Log.d(TAG, "STT save dir: ${sttDir.absolutePath} (exists=${sttDir.exists()}, writable=${sttDir.canWrite()})")
                 val sttFile = try {
@@ -694,6 +710,16 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 Log.d(TAG, "STT file saved: ${sttFile.getOrNull()?.absolutePath} (exists=${sttFile.getOrNull()?.exists()})")
 
+                // 2) SAF 폴더에 직접 저장 (설정된 경우)
+                var sttSafSaved = false
+                if (sttSafUri.isNotBlank()) {
+                    val safResult = config.writeTextToSafDir(sttText, sttSafUri, "${fileName}.txt")
+                    sttSafSaved = safResult != null
+                    Log.d(TAG, "STT SAF direct save: $sttSafSaved (uri=$safResult)")
+                }
+
+                // ── 회의록(요약) 파일 저장 ──
+                // 1) 앱 전용 디렉토리에 항상 백업 저장
                 val summaryDir = config.summarySaveDir
                 Log.d(TAG, "Summary save dir: ${summaryDir.absolutePath} (exists=${summaryDir.exists()}, writable=${summaryDir.canWrite()})")
                 val summaryFile = try {
@@ -703,6 +729,14 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                     Result.failure(e)
                 }
                 Log.d(TAG, "Summary file saved: ${summaryFile.getOrNull()?.absolutePath} (exists=${summaryFile.getOrNull()?.exists()})")
+
+                // 2) SAF 폴더에 직접 저장 (설정된 경우)
+                var summarySafSaved = false
+                if (summarySafUri.isNotBlank()) {
+                    val safResult = config.writeTextToSafDir(summaryText, summarySafUri, "${fileName}.txt")
+                    summarySafSaved = safResult != null
+                    Log.d(TAG, "Summary SAF direct save: $summarySafSaved (uri=$safResult)")
+                }
 
                 // Step 6: Save to DB (최종 경로 반영 — STT와 요약 경로 분리)
                 try {
@@ -721,42 +755,19 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                     Log.e(TAG, "DB insert failed", e)
                 }
 
-                // Step 6.5: SAF 사용자 선택 폴더로 복사 (앱 전용 디렉토리 → 사용자 폴더)
+                // Step 6.5: SAF 직접 저장 결과 집계 (Step 5에서 이미 SAF에 직접 저장 완료)
                 val safResults = mutableListOf<String>()
-                try {
-                    val audioSafUri = config.getSafUriForAudio()
-                    val sttSafUri = config.getSafUriForStt()
-                    val summarySafUri = config.getSafUriForSummary()
-                    val hasSafConfig = audioSafUri.isNotBlank() || sttSafUri.isNotBlank() || summarySafUri.isNotBlank()
-
-                    if (hasSafConfig) {
-                        // 녹음파일 SAF 복사
-                        if (audioSafUri.isNotBlank() && finalAudioFile != null) {
-                            val ok = config.copyFileToSafDir(finalAudioFile, audioSafUri)
-                            safResults.add(if (ok) "✅녹음" else "❌녹음")
-                            Log.d(TAG, "SAF audio copy: $ok (${finalAudioFile.name})")
-                        }
-                        // STT파일 SAF 복사
-                        if (sttSafUri.isNotBlank()) {
-                            sttFile.getOrNull()?.let { f ->
-                                val ok = config.copyFileToSafDir(f, sttSafUri)
-                                safResults.add(if (ok) "✅STT" else "❌STT")
-                                Log.d(TAG, "SAF stt copy: $ok (${f.name})")
-                            }
-                        }
-                        // 회의록(요약)파일 SAF 복사
-                        if (summarySafUri.isNotBlank()) {
-                            summaryFile.getOrNull()?.let { f ->
-                                val ok = config.copyFileToSafDir(f, summarySafUri)
-                                safResults.add(if (ok) "✅회의록" else "❌회의록")
-                                Log.d(TAG, "SAF summary copy: $ok (${f.name})")
-                            }
-                        }
-                        Log.d(TAG, "SAF copy results: ${safResults.joinToString()}")
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "SAF copy failed", e)
-                    safResults.add("❌오류: ${e.message?.take(50)}")
+                if (audioSafUri.isNotBlank() && finalAudioFile != null) {
+                    safResults.add(if (audioSafSaved) "✅녹음" else "❌녹음")
+                }
+                if (sttSafUri.isNotBlank()) {
+                    safResults.add(if (sttSafSaved) "✅STT" else "❌STT")
+                }
+                if (summarySafUri.isNotBlank()) {
+                    safResults.add(if (summarySafSaved) "✅회의록" else "❌회의록")
+                }
+                if (safResults.isNotEmpty()) {
+                    Log.d(TAG, "SAF direct save results: ${safResults.joinToString()}")
                 }
 
                 // Step 7: Google Drive 자동 업로드 (STT + 회의록 파일 — 녹음파일은 stopRecording에서 이미 업로드)
@@ -781,19 +792,22 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                                 }
                                 Log.d(TAG, "Drive upload results: $uploadStatus")
                                 val safStatus = if (safResults.isNotEmpty()) " | 지정폴더: ${safResults.joinToString(" ")}" else ""
+                                val noSafW = if (safResults.isEmpty() && !hasSafConfigured()) "\n⚠️ 저장 폴더 미지정 — 설정에서 폴더를 지정하세요" else ""
                                 updateUiState { it.copy(
-                                    saveStatus = "✅ 저장 완료 + Drive ($uploadStatus)$safStatus",
+                                    saveStatus = "✅ 저장 완료 + Drive ($uploadStatus)$safStatus$noSafW",
                                     isProcessing = false
                                 ) }
                             } else {
+                                val noSafW = if (!hasSafConfigured()) "\n⚠️ 저장 폴더 미지정 — 설정에서 폴더를 지정하세요" else ""
                                 updateUiState { it.copy(
-                                    saveStatus = "✅ 저장 완료 (Drive 폴더 미설정)",
+                                    saveStatus = "✅ 저장 완료 (Drive 폴더 미설정)$noSafW",
                                     isProcessing = false
                                 ) }
                             }
                         } else {
+                            val noSafW = if (!hasSafConfigured()) "\n⚠️ 저장 폴더 미지정 — 설정에서 폴더를 지정하세요" else ""
                             updateUiState { it.copy(
-                                saveStatus = "✅ 저장 완료 (Drive 미연결)",
+                                saveStatus = "✅ 저장 완료 (Drive 미연결)$noSafW",
                                 isProcessing = false
                             ) }
                         }
@@ -806,8 +820,9 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 } else {
                     val safStatus = if (safResults.isNotEmpty()) " | 지정폴더: ${safResults.joinToString(" ")}" else ""
+                    val noSafWarning = if (safResults.isEmpty() && !hasSafConfigured()) "\n⚠️ 저장 폴더 미지정 — 앱 전용 폴더에만 저장됨\n(설정 → 💾저장/Drive에서 폴더를 지정하세요)" else ""
                     updateUiState { it.copy(
-                        saveStatus = "✅ 저장 완료$safStatus",
+                        saveStatus = "✅ 저장 완료$safStatus$noSafWarning",
                         isProcessing = false
                     ) }
                 }
@@ -929,40 +944,61 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
             } catch (e: Exception) { Log.e(TAG, "Summary onProgress callback error", e) }
         }
 
-        return try {
-            when (aiEngine) {
-                "claude" -> {
-                    val result = claudeService.summarize(
-                        sttText = sttText,
-                        apiKey = config.claudeApiKey,
-                        summaryMode = mode,
-                        onProgress = safeOnProgress
-                    )
-                    Pair(result.success, result.text)
+        // ★ v3.0: 최대 2회 재시도 (타임아웃/네트워크 오류 시)
+        val maxRetries = 2
+        var lastError: String = ""
+        for (attempt in 0..maxRetries) {
+            if (attempt > 0) {
+                Log.w(TAG, "Summary retry attempt $attempt / $maxRetries")
+                updateUiState { it.copy(summaryStatus = "$engineLabel 요약 재시도 ($attempt/$maxRetries)...") }
+                kotlinx.coroutines.delay(2000L)  // 2초 대기 후 재시도
+            }
+            try {
+                val result = when (aiEngine) {
+                    "claude" -> {
+                        val r = claudeService.summarize(
+                            sttText = sttText,
+                            apiKey = config.claudeApiKey,
+                            summaryMode = mode,
+                            onProgress = safeOnProgress
+                        )
+                        Pair(r.success, r.text)
+                    }
+                    "chatgpt" -> {
+                        val r = chatGptService.summarize(
+                            sttText = sttText,
+                            apiKey = config.chatGptApiKey,
+                            summaryMode = mode,
+                            onProgress = safeOnProgress
+                        )
+                        Pair(r.success, r.text)
+                    }
+                    else -> { // gemini
+                        val r = geminiService.summarize(
+                            sttText = sttText,
+                            apiKey = config.geminiApiKey,
+                            summaryMode = mode,
+                            onProgress = safeOnProgress
+                        )
+                        Pair(r.success, r.text)
+                    }
                 }
-                "chatgpt" -> {
-                    val result = chatGptService.summarize(
-                        sttText = sttText,
-                        apiKey = config.chatGptApiKey,
-                        summaryMode = mode,
-                        onProgress = safeOnProgress
-                    )
-                    Pair(result.success, result.text)
+                if (result.first) return result  // 성공 시 즉시 반환
+                lastError = result.second
+                if (!result.second.contains("timeout", ignoreCase = true) &&
+                    !result.second.contains("timed out", ignoreCase = true) &&
+                    !result.second.contains("SocketTimeout", ignoreCase = true)) {
+                    return result  // 타임아웃이 아닌 오류는 재시도 안 함
                 }
-                else -> { // gemini
-                    val result = geminiService.summarize(
-                        sttText = sttText,
-                        apiKey = config.geminiApiKey,
-                        summaryMode = mode,
-                        onProgress = safeOnProgress
-                    )
-                    Pair(result.success, result.text)
+            } catch (e: Exception) {
+                Log.e(TAG, "Summary attempt $attempt failed: ${e.message}", e)
+                lastError = "요약 중 오류: ${e.message?.take(200) ?: "알 수 없는 오류"}"
+                if (e !is java.net.SocketTimeoutException && e !is java.io.IOException) {
+                    return Pair(false, lastError)  // 네트워크 오류가 아니면 재시도 안 함
                 }
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Summary execution failed: ${e.message}", e)
-            Pair(false, "요약 중 오류: ${e.message?.take(200) ?: "알 수 없는 오류"}")
         }
+        return Pair(false, "$lastError\n(${maxRetries}회 재시도 후 실패)")
     }
 
     // ── V2.0: 재요약 기능 ────────────────────────────────────────
@@ -1035,6 +1071,26 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
         _uiState.value = _uiState.value.copy(showResummarizeSheet = true)
     }
 
+    /**
+     * ★ v3.0: 회의록 요약 시작 — STT 텍스트(현재 파이프라인 결과 또는 파일 선택)로 요약 시작
+     * 현재 sttText가 있으면 이를 selectedSttText로 복사 후 요약 모드 선택 시트 표시
+     */
+    fun showResummarizeOptions() {
+        val currentSttText = _uiState.value.sttText
+        val selectedSttText = _uiState.value.selectedSttText
+        // 현재 STT 텍스트가 있으면 그것을 우선 사용
+        if (currentSttText.isNotBlank() && selectedSttText.isBlank()) {
+            _uiState.value = _uiState.value.copy(selectedSttText = currentSttText)
+        }
+        if (_uiState.value.selectedSttText.isBlank()) {
+            _uiState.value = _uiState.value.copy(
+                error = "STT 변환 텍스트가 없습니다.\n먼저 STT 변환을 실행하거나 STT txt 파일을 선택해주세요."
+            )
+            return
+        }
+        _uiState.value = _uiState.value.copy(showResummarizeSheet = true)
+    }
+
     fun dismissResummarizeSheet() {
         _uiState.value = _uiState.value.copy(showResummarizeSheet = false)
     }
@@ -1082,11 +1138,13 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                     else -> "Gemini"
                 }
                 val modeLabel = when (summaryMode) {
-                    "topic" -> "주제중심"
-                    "formal_md" -> "회의양식"
-                    "flow" -> "흐름중심"
+                    "topic" -> "다자간협의"
+                    "formal_md" -> "회의록업무"
+                    "ir_md" -> "IR미팅"
+                    "phone" -> "전화메모"
+                    "flow" -> "네트워킹"
                     "lecture_md" -> "강의요약"
-                    else -> "화자중심"
+                    else -> "주간회의"
                 }
                 updateUiState { it.copy(
                     resummarizeStatus = "$engineLabel ($modeLabel) 요약 중...",

@@ -168,6 +168,8 @@ class ChatGptService {
         val template = when (summaryMode) {
             "topic" -> GeminiService.SUMMARY_TOPIC
             "formal_md" -> GeminiService.SUMMARY_FORMAL_MD
+            "ir_md" -> GeminiService.SUMMARY_IR_MD
+            "phone" -> GeminiService.SUMMARY_PHONE
             "flow" -> GeminiService.SUMMARY_FLOW
             "lecture_md" -> GeminiService.SUMMARY_LECTURE_MD
             else -> GeminiService.SUMMARY_SPEAKER

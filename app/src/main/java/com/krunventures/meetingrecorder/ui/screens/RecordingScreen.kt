@@ -133,6 +133,43 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            // SAF 저장 폴더 미설정 경고 배너
+            if (state.safNotConfigured) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3E0)),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            Icons.Filled.Warning,
+                            contentDescription = null,
+                            tint = Color(0xFFE65100),
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "저장 폴더가 지정되지 않았습니다",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp,
+                                color = Color(0xFFE65100)
+                            )
+                            Text(
+                                "설정 → 💾저장/Drive에서 폴더를 선택해야\n파일 관리자에서 파일을 찾을 수 있습니다.",
+                                fontSize = 11.sp,
+                                color = Color(0xFF795548)
+                            )
+                        }
+                    }
+                }
+            }
+
             // === Section 1: Recording ===
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -360,7 +397,25 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
                         Text(state.sttStatus, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
 
-                    // Pipeline start button
+                    // ★ v3.0: MP3 파일 선택 버튼 (STT 변환할 오디오 파일 직접 선택)
+                    OutlinedButton(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            filePicker.launch("audio/*")
+                        },
+                        enabled = !state.isProcessing,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).height(44.dp),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(Icons.Filled.AudioFile, null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            if (state.currentFile != "(없음)") "🎵 ${state.currentFile}" else "🎵 MP3/M4A 파일 선택",
+                            fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    // Pipeline start button (녹음 후 자동 또는 파일 선택 후 수동)
                     Button(
                         onClick = {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -382,7 +437,7 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
                         } else {
                             Icon(Icons.Filled.PlayArrow, null, modifier = Modifier.size(22.dp))
                             Spacer(Modifier.width(6.dp))
-                            Text("▶ 변환 시작", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                            Text("▶ STT 변환 시작", fontSize = 16.sp, fontWeight = FontWeight.Bold)
                         }
                     }
 
@@ -438,6 +493,40 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
                         color = MaterialTheme.colorScheme.onSurface)
                     HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp),
                         color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+
+                    // ★ v3.0: STT txt 파일 선택 버튼 (회의록 요약 단독 실행용)
+                    OutlinedButton(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            sttFilePicker.launch("text/*")
+                        },
+                        enabled = !state.isProcessing,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).height(44.dp),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(Icons.Filled.Description, null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            if (state.selectedSttFile.isNotEmpty()) "📄 ${state.selectedSttFile}" else "📄 STT txt 파일 선택",
+                            fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    // ★ v3.0: 회의록 요약만 시작 버튼 (STT txt 선택 후 또는 실패 후 재시작)
+                    Button(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            viewModel.showResummarizeOptions()
+                        },
+                        enabled = !state.isProcessing && (state.sttText.isNotEmpty() || state.selectedSttText.isNotEmpty()),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32)),
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).height(48.dp),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(Icons.Filled.Refresh, null, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("▶ 회의록 요약 시작", fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                    }
 
                     if (state.summaryProgress > 0) {
                         LinearProgressIndicator(
@@ -1035,15 +1124,25 @@ private fun SummaryModeBottomSheet(
             )
             Spacer(Modifier.height(16.dp))
 
+            // ★ v3.0: 양식별 설명 및 샘플 제공
             val modes = listOf(
-                "speaker" to "화자 중심",
-                "topic" to "주제 중심",
-                "formal_md" to "회의 양식",
-                "flow" to "흐름 중심",
-                "lecture_md" to "강의 요약"
+                Triple("speaker", "주간회의 (화자 중심)",
+                    "파트너 주간회의 — 화자별 코드([K2],[K1]등) 구분\n주제별 재분류, 사실 중심 기록"),
+                Triple("topic", "다자간 협의 (안건 중심)",
+                    "기관 협의·다자간 공식회의 — 안건별 구조화\nQ&A 주석, 배경·합의 소항목 구분"),
+                Triple("formal_md", "회의록(업무)",
+                    "투자업체 사후관리 — 경영현황·재무·IPO·펀드\n전수 포착, Q&A 필수, 경영현황 테이블"),
+                Triple("ir_md", "IR 미팅",
+                    "IR 미팅 노트 — 기술해자·펀드적합성·투자매력도\n3대 분석축, 경쟁사 비교표, 스코어링"),
+                Triple("phone", "전화통화 메모",
+                    "전화통화 — 주제별 1~2줄 압축 요약\n[Antonio] 화자 표기, Q&A 보충 주석"),
+                Triple("flow", "네트워킹(티타임)",
+                    "비공식 미팅·티타임 — 주제별 압축 요약\n현황/주요내용 소항목, Q&A 주석"),
+                Triple("lecture_md", "강의 요약",
+                    "강의/세미나 — 상세 구조화 마크다운 노트\n이모지 금지, 핵심개념 정리 테이블")
             )
 
-            modes.forEach { (value, label) ->
+            modes.forEach { (value, label, description) ->
                 val isSelected = selectedMode == value
                 Surface(
                     modifier = Modifier
@@ -1055,28 +1154,37 @@ private fun SummaryModeBottomSheet(
                     shape = RoundedCornerShape(12.dp),
                     onClick = { selectedMode = value }
                 ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        RadioButton(
-                            selected = isSelected,
-                            onClick = { selectedMode = value }
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            label,
-                            fontSize = 16.sp,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        if (value == currentMode) {
+                    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            RadioButton(
+                                selected = isSelected,
+                                onClick = { selectedMode = value }
+                            )
                             Spacer(Modifier.width(8.dp))
                             Text(
-                                "현재 설정",
-                                fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.primary,
-                                fontWeight = FontWeight.Medium
+                                label,
+                                fontSize = 16.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            if (value == currentMode) {
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    "현재 설정",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
+                        // ★ v3.0: 선택된 양식의 설명 및 샘플 표시
+                        if (isSelected) {
+                            Text(
+                                description,
+                                fontSize = 12.sp,
+                                lineHeight = 18.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(start = 48.dp, top = 4.dp)
                             )
                         }
                     }

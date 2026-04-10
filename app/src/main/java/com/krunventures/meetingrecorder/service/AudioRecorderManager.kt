@@ -45,39 +45,27 @@ class AudioRecorderManager(private val context: Context) {
     private var timerThread: Thread? = null
     @Volatile private var timerRunning = false
 
-    // 오디오 포커스 변경 리스너
+    // ★ v3.0: 녹음 중 인터럽트 완전 차단 모드
+    // 전화, 카메라, 다른 앱의 마이크 점유 등 모든 오디오 포커스 변경을 무시하고 녹음 계속 진행
     private val audioFocusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
         when (focusChange) {
             AudioManager.AUDIOFOCUS_LOSS -> {
-                Log.w(TAG, "Audio focus lost permanently (camera, video call, etc.)")
-                wasAudioFocusLost = true
+                Log.w(TAG, "Audio focus lost permanently — 녹음 계속 진행 (v3.0 인터럽트 차단)")
+                // ★ v3.0: 녹음을 중단하지 않음. 로그만 기록
                 _audioFocusLost.value = true
-                // 녹음 중일 때만 자동 일시정지
-                if (_state.value == RecordingState.RECORDING) {
-                    pauseRecording()
-                    _state.value = RecordingState.AUDIO_FOCUS_LOST
-                }
             }
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
-                Log.w(TAG, "Audio focus lost temporarily")
+                Log.w(TAG, "Audio focus lost temporarily — 녹음 계속 진행 (v3.0 인터럽트 차단)")
+                // ★ v3.0: 일시정지하지 않음
                 _audioFocusLost.value = true
-                if (_state.value == RecordingState.RECORDING) {
-                    pauseRecording()
-                }
             }
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
-                Log.i(TAG, "Audio focus ducked (volume reduced)")
-                // 녹음은 계속 진행하지만 다른 앱의 음량이 줄어듦
+                Log.i(TAG, "Audio focus ducked (volume reduced) — 녹음 계속 진행")
             }
             AudioManager.AUDIOFOCUS_GAIN -> {
                 Log.i(TAG, "Audio focus regained")
                 _audioFocusLost.value = false
-                // 이전에 포커스 손실로 일시정지했다면 자동 재개
-                if (wasAudioFocusLost && _state.value == RecordingState.PAUSED) {
-                    resumeRecording()
-                    _state.value = RecordingState.RECORDING
-                    wasAudioFocusLost = false
-                }
+                wasAudioFocusLost = false
             }
         }
     }
@@ -169,7 +157,8 @@ class AudioRecorderManager(private val context: Context) {
         return try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 // Android 8.0+ : AudioFocusRequest 사용
-                val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                // ★ v3.0: AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE — 다른 앱의 오디오를 완전 차단
+                val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE)
                     .setAudioAttributes(
                         android.media.AudioAttributes.Builder()
                             .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
@@ -177,6 +166,7 @@ class AudioRecorderManager(private val context: Context) {
                             .build()
                     )
                     .setOnAudioFocusChangeListener(audioFocusChangeListener)
+                    .setWillPauseWhenDucked(false)  // ★ v3.0: ducking 시에도 녹음 계속
                     .build()
                 audioFocusRequest = request
                 val result = audioManager.requestAudioFocus(request)

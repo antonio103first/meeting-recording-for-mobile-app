@@ -249,6 +249,95 @@ class ConfigManager(private val context: Context) {
     fun getSafUriForSummary(): String = userSelectedSummaryDir.ifBlank { userSelectedBaseDir }
 
     /**
+     * ★ SAF 폴더에 텍스트 파일을 직접 저장 (2단계 복사 없이 1단계로 바로 저장)
+     * @param text 저장할 텍스트 내용
+     * @param safUriString SAF tree URI
+     * @param fileName 파일명 (확장자 포함, 예: "회의록.md")
+     * @return 성공 시 SAF URI 문자열, 실패 시 null
+     */
+    fun writeTextToSafDir(text: String, safUriString: String, fileName: String): String? {
+        if (safUriString.isBlank()) return null
+        return try {
+            val treeUri = Uri.parse(safUriString)
+            val treeDocId = DocumentsContract.getTreeDocumentId(treeUri)
+            val parentUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, treeDocId)
+
+            // 동일 이름 파일 삭제
+            val treeDoc = DocumentFile.fromTreeUri(context, treeUri)
+            treeDoc?.findFile(fileName)?.delete()
+            treeDoc?.findFile(fileName.substringBeforeLast("."))?.delete()
+
+            val newDocUri = DocumentsContract.createDocument(
+                context.contentResolver, parentUri, "application/octet-stream", fileName
+            )
+            if (newDocUri == null) {
+                Log.e(TAG, "SAF writeText createDocument 실패: $fileName")
+                return null
+            }
+
+            context.contentResolver.openOutputStream(newDocUri)?.use { out ->
+                out.write(text.toByteArray(Charsets.UTF_8))
+            } ?: run {
+                Log.e(TAG, "SAF writeText openOutputStream 실패: $newDocUri")
+                return null
+            }
+
+            Log.d(TAG, "✅ SAF 직접 저장 성공: $fileName → $newDocUri")
+            newDocUri.toString()
+        } catch (e: SecurityException) {
+            Log.e(TAG, "❌ SAF 권한 만료 (writeText): $fileName → $safUriString", e)
+            null
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ SAF 직접 저장 실패 (writeText): $fileName → $safUriString", e)
+            null
+        }
+    }
+
+    /**
+     * ★ SAF 폴더에 오디오 등 바이너리 파일을 직접 저장 (2단계 복사 없이 1단계로 바로 저장)
+     * @param srcFile 저장할 원본 파일
+     * @param safUriString SAF tree URI
+     * @return 성공 시 SAF URI 문자열, 실패 시 null
+     */
+    fun writeFileToSafDir(srcFile: File, safUriString: String): String? {
+        if (safUriString.isBlank() || !srcFile.exists()) return null
+        return try {
+            val treeUri = Uri.parse(safUriString)
+            val treeDocId = DocumentsContract.getTreeDocumentId(treeUri)
+            val parentUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, treeDocId)
+
+            // 동일 이름 파일 삭제
+            val treeDoc = DocumentFile.fromTreeUri(context, treeUri)
+            treeDoc?.findFile(srcFile.name)?.delete()
+            treeDoc?.findFile(srcFile.nameWithoutExtension)?.delete()
+
+            val newDocUri = DocumentsContract.createDocument(
+                context.contentResolver, parentUri, "application/octet-stream", srcFile.name
+            )
+            if (newDocUri == null) {
+                Log.e(TAG, "SAF writeFile createDocument 실패: ${srcFile.name}")
+                return null
+            }
+
+            context.contentResolver.openOutputStream(newDocUri)?.use { out ->
+                srcFile.inputStream().use { input -> input.copyTo(out) }
+            } ?: run {
+                Log.e(TAG, "SAF writeFile openOutputStream 실패: $newDocUri")
+                return null
+            }
+
+            Log.d(TAG, "✅ SAF 직접 파일 저장 성공: ${srcFile.name} → $newDocUri")
+            newDocUri.toString()
+        } catch (e: SecurityException) {
+            Log.e(TAG, "❌ SAF 권한 만료 (writeFile): ${srcFile.name} → $safUriString", e)
+            null
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ SAF 직접 파일 저장 실패 (writeFile): ${srcFile.name} → $safUriString", e)
+            null
+        }
+    }
+
+    /**
      * SAF URI에서 표시용 경로 추출 (UI 표시용)
      */
     fun safUriToDisplayPath(uriString: String): String {

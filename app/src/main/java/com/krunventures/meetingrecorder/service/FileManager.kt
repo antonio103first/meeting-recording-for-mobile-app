@@ -22,7 +22,7 @@ class FileManager {
     fun saveSummaryText(text: String, saveDir: File, fileName: String): Result<File> {
         return try {
             saveDir.mkdirs()
-            val file = File(saveDir, "${fileName}.md")
+            val file = File(saveDir, "${fileName}.txt")
             file.writeText(text, Charsets.UTF_8)
             Result.success(file)
         } catch (e: Exception) {
@@ -48,7 +48,7 @@ class FileManager {
                 appendLine()
                 appendLine(sttText.trim())
             }
-            val file = File(saveDir, "${fileName}.md")
+            val file = File(saveDir, "${fileName}.txt")
             file.writeText(combined, Charsets.UTF_8)
             Result.success(file)
         } catch (e: Exception) {
@@ -71,7 +71,7 @@ class FileManager {
                 appendLine("---")
                 appendLine("회의녹음요약 앱 재요약 자동 생성")
             }
-            val file = File(saveDir, "${fileName}.md")
+            val file = File(saveDir, "${fileName}.txt")
             file.writeText(content, Charsets.UTF_8)
             Result.success(file)
         } catch (e: Exception) {
@@ -148,11 +148,13 @@ class FileManager {
             .removeSuffix(".stt")
             .take(50)  // 너무 긴 이름 방지
         val modeLabel = when (summaryMode) {
-            "topic" -> "주제중심"
-            "formal_md" -> "회의양식"
-            "flow" -> "흐름중심"
+            "topic" -> "다자간협의"
+            "formal_md" -> "회의록업무"
+            "ir_md" -> "IR미팅"
+            "phone" -> "전화메모"
+            "flow" -> "네트워킹"
             "lecture_md" -> "강의요약"
-            else -> "화자중심"
+            else -> "주간회의"
         }
         return "${date}_${baseName}_${modeLabel}"
     }

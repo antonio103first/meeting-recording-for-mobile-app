@@ -1,8 +1,13 @@
 package com.krunventures.meetingrecorder.ui.screens
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.webkit.WebView
+import android.widget.Toast
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -17,6 +22,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -33,6 +39,9 @@ fun MeetingListScreen(viewModel: MeetingListViewModel) {
     val meetings by viewModel.meetings.collectAsState(initial = emptyList())
     val state by viewModel.uiState.collectAsState()
     var selectedMeeting by remember { mutableStateOf<Meeting?>(null) }
+
+    // 탭 상태: 0=녹음파일MP3, 1=STT변환, 2=회의록(요약)
+    var selectedTab by remember { mutableIntStateOf(2) }
 
     // 전체화면 다이얼로그 상태
     var showFullScreen by remember { mutableStateOf(false) }
@@ -58,7 +67,7 @@ fun MeetingListScreen(viewModel: MeetingListViewModel) {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("📋 저장된 회의 목록", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = TextDark)
+                Text("저장된 회의 목록", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = TextDark)
                 Text("${meetings.size}건", fontSize = 13.sp, color = TextLight)
             }
             Text("길게 누르면 관리 메뉴가 표시됩니다", fontSize = 11.sp, color = TextLight,
@@ -98,7 +107,6 @@ fun MeetingListScreen(viewModel: MeetingListViewModel) {
                                 modifier = Modifier.fillMaxWidth().padding(14.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                // 파일 아이콘
                                 Icon(
                                     Icons.Filled.Description, null,
                                     modifier = Modifier.size(36.dp),
@@ -127,7 +135,7 @@ fun MeetingListScreen(viewModel: MeetingListViewModel) {
                                         if (meeting.mp3LocalPath.isNotBlank()) {
                                             val exists = java.io.File(meeting.mp3LocalPath).exists()
                                             Text(
-                                                if (exists) "🎵 녹음" else "🎵 ❌",
+                                                if (exists) "MP3" else "MP3 X",
                                                 fontSize = 10.sp,
                                                 color = if (exists) Success else Danger
                                             )
@@ -135,15 +143,17 @@ fun MeetingListScreen(viewModel: MeetingListViewModel) {
                                         if (meeting.sttLocalPath.isNotBlank()) {
                                             val exists = java.io.File(meeting.sttLocalPath).exists()
                                             Text(
-                                                if (exists) "📝 회의록" else "📝 ❌",
+                                                if (exists) "STT" else "STT X",
                                                 fontSize = 10.sp,
                                                 color = if (exists) Success else Danger
                                             )
                                         }
+                                        if (meeting.summaryText.isNotBlank()) {
+                                            Text("요약", fontSize = 10.sp, color = Success)
+                                        }
                                     }
                                 }
 
-                                // 관리 버튼
                                 IconButton(onClick = { viewModel.showActionMenu(meeting) }) {
                                     Icon(Icons.Filled.MoreVert, "관리", tint = TextLight)
                                 }
@@ -152,7 +162,7 @@ fun MeetingListScreen(viewModel: MeetingListViewModel) {
                     }
                 }
 
-                // Detail view (미리보기 + 전체보기 버튼)
+                // ── Detail view ──
                 selectedMeeting?.let { meeting ->
                     Spacer(Modifier.height(8.dp))
                     Card(
@@ -161,16 +171,20 @@ fun MeetingListScreen(viewModel: MeetingListViewModel) {
                         shape = RoundedCornerShape(12.dp)
                     ) {
                         Column(modifier = Modifier.padding(12.dp)) {
+                            // 헤더 + 닫기
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text("내용 보기", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                Text(
+                                    meeting.fileName.ifEmpty { "내용 보기" },
+                                    fontWeight = FontWeight.Bold, fontSize = 14.sp,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
+                                )
                                 Row {
-                                    IconButton(onClick = {
-                                        viewModel.showActionMenu(meeting)
-                                    }) {
+                                    IconButton(onClick = { viewModel.showActionMenu(meeting) }) {
                                         Icon(Icons.Filled.MoreVert, "관리", tint = TextLight, modifier = Modifier.size(20.dp))
                                     }
                                     IconButton(onClick = { selectedMeeting = null }) {
@@ -179,9 +193,9 @@ fun MeetingListScreen(viewModel: MeetingListViewModel) {
                                 }
                             }
 
-                            // Speaker name change + Share buttons
+                            // 화자이름 변경 + 공유 버튼
                             Row(
-                                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 Button(
@@ -190,9 +204,10 @@ fun MeetingListScreen(viewModel: MeetingListViewModel) {
                                         viewModel.showSpeakerDialog()
                                     },
                                     modifier = Modifier.weight(1f),
-                                    colors = ButtonDefaults.buttonColors(containerColor = Accent)
+                                    colors = ButtonDefaults.buttonColors(containerColor = Accent),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
                                 ) {
-                                    Text("🔄 화자이름 변경", fontSize = 12.sp)
+                                    Text("화자이름 변경", fontSize = 12.sp)
                                 }
                                 Button(
                                     onClick = {
@@ -200,99 +215,190 @@ fun MeetingListScreen(viewModel: MeetingListViewModel) {
                                         viewModel.showShareSheet()
                                     },
                                     modifier = Modifier.weight(1f),
-                                    colors = ButtonDefaults.buttonColors(containerColor = Accent)
+                                    colors = ButtonDefaults.buttonColors(containerColor = Accent),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
                                 ) {
-                                    Text("📤 공유", fontSize = 12.sp)
+                                    Text("공유", fontSize = 12.sp)
                                 }
                             }
+
+                            Spacer(Modifier.height(10.dp))
+
+                            // ★ 탭 UI: 녹음파일 MP3 | STT변환 | 회의록(요약)
+                            val tabTitles = listOf("녹음파일 MP3", "STT변환", "회의록(요약)")
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(
+                                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                                        shape = RoundedCornerShape(10.dp)
+                                    )
+                                    .padding(3.dp),
+                                horizontalArrangement = Arrangement.spacedBy(3.dp)
+                            ) {
+                                tabTitles.forEachIndexed { index, title ->
+                                    val isActive = selectedTab == index
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .background(
+                                                color = if (isActive) Accent else Color.Transparent,
+                                                shape = RoundedCornerShape(8.dp)
+                                            )
+                                            .clickable { selectedTab = index }
+                                            .padding(vertical = 10.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            title,
+                                            fontSize = if (isActive) 13.sp else 12.sp,
+                                            fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
+                                            color = if (isActive) Color.White else TextLight,
+                                            textAlign = TextAlign.Center,
+                                            maxLines = 1
+                                        )
+                                    }
+                                }
+                            }
+
+                            Spacer(Modifier.height(10.dp))
+
+                            // ★ 탭 컨텐츠
+                            when (selectedTab) {
+                                // ── 탭 0: 녹음파일 MP3 ──
+                                0 -> {
+                                    if (meeting.mp3LocalPath.isNotBlank()) {
+                                        val mp3File = java.io.File(meeting.mp3LocalPath)
+                                        Column {
+                                            Text("녹음 파일 정보", fontWeight = FontWeight.Medium, fontSize = 13.sp, color = Accent)
+                                            Spacer(Modifier.height(6.dp))
+                                            Text("파일명: ${mp3File.name}", fontSize = 12.sp, color = TextDark)
+                                            Text(
+                                                "경로: ${meeting.mp3LocalPath}",
+                                                fontSize = 10.sp, color = TextLight,
+                                                maxLines = 2, overflow = TextOverflow.Ellipsis
+                                            )
+                                            Text(
+                                                "크기: ${String.format("%.1f", meeting.fileSizeMb)}MB",
+                                                fontSize = 12.sp, color = TextDark
+                                            )
+                                            Text(
+                                                "상태: ${if (mp3File.exists()) "파일 존재" else "파일 없음 (삭제됨)"}",
+                                                fontSize = 12.sp,
+                                                color = if (mp3File.exists()) Success else Danger
+                                            )
+                                        }
+                                    } else {
+                                        Text("녹음 파일 정보가 없습니다.", fontSize = 13.sp, color = TextLight)
+                                    }
+                                }
+
+                                // ── 탭 1: STT변환 ──
+                                1 -> {
+                                    Column {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text("STT 변환 원문", fontWeight = FontWeight.Medium, fontSize = 13.sp, color = Accent)
+                                            if (meeting.sttText.isNotBlank()) {
+                                                Row {
+                                                    // 전체보기 버튼
+                                                    TextButton(
+                                                        onClick = {
+                                                            fullScreenTitle = "STT 변환 원문"
+                                                            fullScreenText = meeting.sttText
+                                                            showFullScreen = true
+                                                        },
+                                                        contentPadding = PaddingValues(horizontal = 6.dp)
+                                                    ) {
+                                                        Icon(Icons.Filled.Fullscreen, null, modifier = Modifier.size(16.dp))
+                                                        Spacer(Modifier.width(2.dp))
+                                                        Text("전체보기", fontSize = 11.sp)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        Spacer(Modifier.height(4.dp))
+                                        Text(
+                                            text = meeting.sttText.ifEmpty { "(STT 변환 결과 없음)" },
+                                            maxLines = 8,
+                                            overflow = TextOverflow.Ellipsis,
+                                            fontSize = 12.sp, lineHeight = 18.sp, color = TextDark
+                                        )
+
+                                        // 파일 경로 표시
+                                        if (meeting.sttLocalPath.isNotBlank()) {
+                                            Spacer(Modifier.height(8.dp))
+                                            Text("파일: ${meeting.sttLocalPath}", fontSize = 10.sp, color = TextLight,
+                                                maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                        }
+                                    }
+                                }
+
+                                // ── 탭 2: 회의록(요약) ──
+                                2 -> {
+                                    val context = LocalContext.current
+                                    Column {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text("회의록 요약", fontWeight = FontWeight.Medium, fontSize = 13.sp, color = Accent)
+                                            if (meeting.summaryText.isNotBlank()) {
+                                                Row {
+                                                    // 전체복사 버튼
+                                                    TextButton(
+                                                        onClick = {
+                                                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                                            clipboard.setPrimaryClip(ClipData.newPlainText("회의록", meeting.summaryText))
+                                                            Toast.makeText(context, "회의록 전체 복사 완료", Toast.LENGTH_SHORT).show()
+                                                        },
+                                                        contentPadding = PaddingValues(horizontal = 6.dp)
+                                                    ) {
+                                                        Icon(Icons.Filled.ContentCopy, null, modifier = Modifier.size(16.dp))
+                                                        Spacer(Modifier.width(2.dp))
+                                                        Text("전체복사", fontSize = 11.sp)
+                                                    }
+                                                    // 전체보기 버튼
+                                                    TextButton(
+                                                        onClick = {
+                                                            fullScreenTitle = "회의록 요약"
+                                                            fullScreenText = meeting.summaryText
+                                                            showFullScreen = true
+                                                        },
+                                                        contentPadding = PaddingValues(horizontal = 6.dp)
+                                                    ) {
+                                                        Icon(Icons.Filled.Fullscreen, null, modifier = Modifier.size(16.dp))
+                                                        Spacer(Modifier.width(2.dp))
+                                                        Text("전체보기", fontSize = 11.sp)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        Spacer(Modifier.height(4.dp))
+                                        Text(
+                                            text = meeting.summaryText.ifEmpty { "(회의록 요약 없음)" },
+                                            maxLines = 8,
+                                            overflow = TextOverflow.Ellipsis,
+                                            fontSize = 12.sp, lineHeight = 18.sp, color = TextDark
+                                        )
+
+                                        // 파일 경로 표시
+                                        if (meeting.summaryLocalPath.isNotBlank()) {
+                                            Spacer(Modifier.height(8.dp))
+                                            Text("파일: ${meeting.summaryLocalPath}", fontSize = 10.sp, color = TextLight,
+                                                maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                        }
+                                    }
+                                }
+                            }
+
                             Spacer(Modifier.height(8.dp))
 
-                            // 회의록 요약 미리보기
-                            Text("회의록 요약", fontWeight = FontWeight.Medium, fontSize = 13.sp,
-                                color = Accent, modifier = Modifier.padding(bottom = 4.dp))
-                            Text(
-                                text = meeting.summaryText.ifEmpty { "(없음)" },
-                                maxLines = 6,
-                                overflow = TextOverflow.Ellipsis,
-                                fontSize = 12.sp, lineHeight = 18.sp, color = TextDark
-                            )
-                            Spacer(Modifier.height(4.dp))
-                            TextButton(onClick = {
-                                fullScreenTitle = "회의록 요약"
-                                fullScreenText = meeting.summaryText.ifEmpty { "(없음)" }
-                                showFullScreen = true
-                            }) {
-                                Icon(Icons.Filled.Fullscreen, null, modifier = Modifier.size(18.dp))
-                                Spacer(Modifier.width(4.dp))
-                                Text("전체보기", fontSize = 13.sp)
-                            }
-
-                            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp),
-                                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
-
-                            // STT 원문 미리보기
-                            Text("STT 변환 원문", fontWeight = FontWeight.Medium, fontSize = 13.sp,
-                                color = Accent, modifier = Modifier.padding(bottom = 4.dp))
-                            Text(
-                                text = meeting.sttText.ifEmpty { "(없음)" },
-                                maxLines = 4,
-                                overflow = TextOverflow.Ellipsis,
-                                fontSize = 12.sp, lineHeight = 18.sp, color = TextDark
-                            )
-                            Spacer(Modifier.height(4.dp))
-                            TextButton(onClick = {
-                                fullScreenTitle = "STT 변환 원문"
-                                fullScreenText = meeting.sttText.ifEmpty { "(없음)" }
-                                showFullScreen = true
-                            }) {
-                                Icon(Icons.Filled.Fullscreen, null, modifier = Modifier.size(18.dp))
-                                Spacer(Modifier.width(4.dp))
-                                Text("전체보기", fontSize = 13.sp)
-                            }
-
-                            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp),
-                                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
-
-                            // 파일 위치 정보 표시
-                            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp),
-                                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
-                            Text("파일 저장 위치", fontWeight = FontWeight.Medium, fontSize = 13.sp,
-                                color = Accent, modifier = Modifier.padding(bottom = 4.dp))
-
-                            // 녹음 파일 경로
-                            if (meeting.mp3LocalPath.isNotBlank()) {
-                                Column(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
-                                    Text("🎵 녹음 파일", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = TextDark)
-                                    Text(
-                                        meeting.mp3LocalPath,
-                                        fontSize = 10.sp,
-                                        color = TextLight,
-                                        maxLines = 2,
-                                        overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.padding(top = 2.dp)
-                                    )
-                                }
-                            }
-
-                            // 회의록 파일 경로
-                            if (meeting.sttLocalPath.isNotBlank()) {
-                                Column(modifier = Modifier.fillMaxWidth()) {
-                                    Text("📝 회의록 파일", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = TextDark)
-                                    Text(
-                                        meeting.sttLocalPath,
-                                        fontSize = 10.sp,
-                                        color = TextLight,
-                                        maxLines = 2,
-                                        overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.padding(top = 2.dp)
-                                    )
-                                }
-                            }
-
-                            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp),
-                                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
-
-                            // 전체 내용 보기 (요약 + STT 합본)
+                            // 전체 내용 보기 버튼
                             Button(
                                 onClick = {
                                     fullScreenTitle = meeting.fileName.ifEmpty { "회의 내용" }
@@ -321,7 +427,7 @@ fun MeetingListScreen(viewModel: MeetingListViewModel) {
         }
     }
 
-    // === 전체화면 다이얼로그 — 독립 스크롤 + 부분 선택 복사 ===
+    // === 전체화면 다이얼로그 — 독립 스크롤 + 부분 선택 복사 + 전체복사 버튼 ===
     if (showFullScreen) {
         MeetingFullScreenTextDialog(
             title = fullScreenTitle,
@@ -351,11 +457,11 @@ fun MeetingListScreen(viewModel: MeetingListViewModel) {
                 Column {
                     Text("선택한 회의 기록을 삭제하시겠습니까?")
                     Spacer(Modifier.height(4.dp))
-                    Text("• DB 기록 삭제", fontSize = 13.sp, color = TextLight)
-                    Text("• 녹음 파일 삭제", fontSize = 13.sp, color = TextLight)
-                    Text("• 회의록 파일 삭제", fontSize = 13.sp, color = TextLight)
+                    Text("DB 기록 삭제", fontSize = 13.sp, color = TextLight)
+                    Text("녹음 파일 삭제", fontSize = 13.sp, color = TextLight)
+                    Text("회의록 파일 삭제", fontSize = 13.sp, color = TextLight)
                     Spacer(Modifier.height(4.dp))
-                    Text("⚠ 이 작업은 되돌릴 수 없습니다.", fontSize = 12.sp, color = Danger)
+                    Text("이 작업은 되돌릴 수 없습니다.", fontSize = 12.sp, color = Danger)
                 }
             },
             confirmButton = {
@@ -422,9 +528,7 @@ fun MeetingListScreen(viewModel: MeetingListViewModel) {
 }
 
 /**
- * 전체화면 마크다운 렌더링 다이얼로그 — 회의목록 전용
- * - WebView로 마크다운 표/서식을 HTML로 렌더링
- * - 스크롤과 텍스트 선택(길게 눌러 복사)이 동시에 가능
+ * 전체화면 마크다운 렌더링 다이얼로그 + 전체복사 버튼
  */
 @Composable
 private fun MeetingFullScreenTextDialog(
@@ -432,6 +536,7 @@ private fun MeetingFullScreenTextDialog(
     text: String,
     onDismiss: () -> Unit
 ) {
+    val context = LocalContext.current
     val htmlContent = remember(text) { markdownToHtml(text) }
 
     Dialog(
@@ -463,6 +568,14 @@ private fun MeetingFullScreenTextDialog(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f)
                     )
+                    // ★ 전체복사 버튼
+                    IconButton(onClick = {
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        clipboard.setPrimaryClip(ClipData.newPlainText("회의록", text))
+                        Toast.makeText(context, "전체 내용 복사 완료", Toast.LENGTH_SHORT).show()
+                    }) {
+                        Icon(Icons.Filled.ContentCopy, "전체복사", tint = Accent)
+                    }
                     IconButton(onClick = onDismiss) {
                         Icon(Icons.Filled.Close, "닫기")
                     }
@@ -471,16 +584,16 @@ private fun MeetingFullScreenTextDialog(
 
                 // 안내 문구
                 Text(
-                    "길게 눌러 원하는 부분을 선택하여 복사하세요",
+                    "길게 눌러 선택 복사 | 우측 상단 아이콘으로 전체 복사",
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
-                // WebView — 마크다운을 HTML로 렌더링, 스크롤/복사 자유
+                // WebView — 마크다운을 HTML로 렌더링
                 AndroidView(
-                    factory = { context ->
-                        WebView(context).apply {
+                    factory = { ctx ->
+                        WebView(ctx).apply {
                             settings.apply {
                                 javaScriptEnabled = false
                                 defaultTextEncodingName = "UTF-8"
@@ -506,7 +619,6 @@ private fun MeetingFullScreenTextDialog(
 
 /**
  * 마크다운 텍스트를 HTML로 변환
- * - 표(table), 헤더(#), 굵게(**), 리스트(-), 수평선(---) 지원
  */
 private fun markdownToHtml(markdown: String): String {
     val body = StringBuilder()
@@ -517,36 +629,24 @@ private fun markdownToHtml(markdown: String): String {
     for (line in lines) {
         val trimmed = line.trim()
 
-        // 테이블 구분선 (|---|---|) → 무시
-        if (trimmed.matches(Regex("^\\|[\\s\\-:|]+\\|$"))) {
-            continue
-        }
+        if (trimmed.matches(Regex("^\\|[\\s\\-:|]+\\|$"))) continue
 
-        // 테이블 행
         if (trimmed.startsWith("|") && trimmed.endsWith("|")) {
             if (!inTable) {
                 body.append("<table>")
                 inTable = true
                 isFirstTableRow = true
             }
-            val cells = trimmed.split("|")
-                .filter { it.isNotBlank() }
-                .map { it.trim() }
+            val cells = trimmed.split("|").filter { it.isNotBlank() }.map { it.trim() }
             val tag = if (isFirstTableRow) "th" else "td"
             body.append("<tr>")
-            cells.forEach { cell ->
-                body.append("<$tag>${inlineMd(cell)}</$tag>")
-            }
+            cells.forEach { cell -> body.append("<$tag>${inlineMd(cell)}</$tag>") }
             body.append("</tr>")
             isFirstTableRow = false
             continue
         }
 
-        // 테이블 종료
-        if (inTable) {
-            body.append("</table>")
-            inTable = false
-        }
+        if (inTable) { body.append("</table>"); inTable = false }
 
         when {
             trimmed.startsWith("#### ") -> body.append("<h4>${inlineMd(trimmed.drop(5))}</h4>")
@@ -554,7 +654,8 @@ private fun markdownToHtml(markdown: String): String {
             trimmed.startsWith("## ") -> body.append("<h2>${inlineMd(trimmed.drop(3))}</h2>")
             trimmed.startsWith("# ") -> body.append("<h1>${inlineMd(trimmed.drop(2))}</h1>")
             trimmed == "---" || trimmed == "***" -> body.append("<hr>")
-            trimmed.startsWith("- ") -> body.append("<div class='li'>• ${inlineMd(trimmed.drop(2))}</div>")
+            trimmed.startsWith("- ") -> body.append("<div class='li'>&bull; ${inlineMd(trimmed.drop(2))}</div>")
+            trimmed.startsWith("> ") -> body.append("<blockquote>${inlineMd(trimmed.drop(2))}</blockquote>")
             trimmed.matches(Regex("^\\d+\\.\\s.*")) -> {
                 val content = trimmed.replaceFirst(Regex("^\\d+\\.\\s"), "")
                 body.append("<div class='li'>${trimmed.substringBefore(" ")} ${inlineMd(content)}</div>")
@@ -574,44 +675,28 @@ private fun markdownToHtml(markdown: String): String {
 * { box-sizing: border-box; }
 body {
     font-family: 'Noto Sans KR', -apple-system, sans-serif;
-    font-size: 15px;
-    line-height: 1.7;
-    color: #1a1a1a;
-    padding: 12px 16px;
-    margin: 0;
-    word-break: keep-all;
+    font-size: 15px; line-height: 1.7; color: #1a1a1a;
+    padding: 12px 16px; margin: 0; word-break: keep-all;
 }
 h1 { font-size: 20px; margin: 18px 0 8px; color: #111; border-bottom: 2px solid #2196F3; padding-bottom: 4px; }
 h2 { font-size: 17px; margin: 14px 0 6px; color: #1565C0; }
 h3 { font-size: 15px; margin: 12px 0 4px; color: #333; }
 h4 { font-size: 14px; margin: 10px 0 4px; color: #555; }
-table {
-    width: 100%;
-    border-collapse: collapse;
-    margin: 12px 0;
-    font-size: 14px;
-}
-th, td {
-    border: 1px solid #ccc;
-    padding: 8px 12px;
-    text-align: left;
-    vertical-align: top;
-}
+table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 14px; }
+th, td { border: 1px solid #ccc; padding: 8px 12px; text-align: left; vertical-align: top; }
 th { background: #e3f2fd; font-weight: bold; color: #1565C0; }
 tr:nth-child(even) td { background: #fafafa; }
 hr { border: none; border-top: 1px solid #ddd; margin: 16px 0; }
 p { margin: 4px 0; }
 .li { padding: 2px 0 2px 8px; }
 strong { color: #1565C0; }
+blockquote { margin: 6px 0; padding: 6px 12px; border-left: 3px solid #2196F3; background: #f5f9ff; font-size: 14px; }
 </style>
 </head><body>
 $body
 </body></html>"""
 }
 
-/**
- * 인라인 마크다운 → HTML (굵게, 이모지 보존)
- */
 private fun inlineMd(text: String): String {
     return text
         .replace(Regex("\\*\\*(.+?)\\*\\*"), "<strong>$1</strong>")
@@ -621,7 +706,7 @@ private fun inlineMd(text: String): String {
 }
 
 /**
- * ⋮ 메뉴 — 이름변경 + 파일삭제
+ * Action Menu Dialog
  */
 @Composable
 private fun ActionMenuDialog(
@@ -646,11 +731,7 @@ private fun ActionMenuDialog(
                 Text(meeting.createdAt, fontSize = 12.sp, color = TextLight)
                 Spacer(Modifier.height(12.dp))
 
-                // 복사 (클립보드)
-                TextButton(
-                    onClick = onCopy,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
+                TextButton(onClick = onCopy, modifier = Modifier.fillMaxWidth()) {
                     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Filled.ContentCopy, null, modifier = Modifier.size(20.dp), tint = Accent)
                         Spacer(Modifier.width(12.dp))
@@ -661,11 +742,7 @@ private fun ActionMenuDialog(
                     }
                 }
 
-                // 이름 변경
-                TextButton(
-                    onClick = onRename,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
+                TextButton(onClick = onRename, modifier = Modifier.fillMaxWidth()) {
                     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Filled.Edit, null, modifier = Modifier.size(20.dp), tint = Accent)
                         Spacer(Modifier.width(12.dp))
@@ -673,11 +750,7 @@ private fun ActionMenuDialog(
                     }
                 }
 
-                // 로컬 파일만 삭제
-                TextButton(
-                    onClick = onDeleteFilesOnly,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
+                TextButton(onClick = onDeleteFilesOnly, modifier = Modifier.fillMaxWidth()) {
                     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Filled.FolderDelete, null, modifier = Modifier.size(20.dp), tint = Warning)
                         Spacer(Modifier.width(12.dp))
@@ -688,11 +761,7 @@ private fun ActionMenuDialog(
                     }
                 }
 
-                // 전체 삭제
-                TextButton(
-                    onClick = onDelete,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
+                TextButton(onClick = onDelete, modifier = Modifier.fillMaxWidth()) {
                     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Filled.Delete, null, modifier = Modifier.size(20.dp), tint = Danger)
                         Spacer(Modifier.width(12.dp))
@@ -705,16 +774,10 @@ private fun ActionMenuDialog(
             }
         },
         confirmButton = {},
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("닫기") }
-        }
+        dismissButton = { TextButton(onClick = onDismiss) { Text("닫기") } }
     )
 }
 
-/**
- * Speaker Name Change Dialog
- * Shows detected speakers with TextField for each name mapping
- */
 @Composable
 private fun SpeakerNameDialog(
     speakers: List<Pair<String, String>>,
@@ -728,7 +791,6 @@ private fun SpeakerNameDialog(
         text = {
             Column(modifier = Modifier.fillMaxWidth()) {
                 Text("각 화자의 실명을 입력하세요", fontSize = 13.sp, color = TextLight, modifier = Modifier.padding(bottom = 12.dp))
-
                 LazyColumn(modifier = Modifier.fillMaxWidth()) {
                     items(speakers.size) { index ->
                         val (label, name) = speakers[index]
@@ -751,21 +813,12 @@ private fun SpeakerNameDialog(
             }
         },
         confirmButton = {
-            Button(
-                onClick = onApply,
-                colors = ButtonDefaults.buttonColors(containerColor = Accent)
-            ) { Text("적용") }
+            Button(onClick = onApply, colors = ButtonDefaults.buttonColors(containerColor = Accent)) { Text("적용") }
         },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("취소") }
-        }
+        dismissButton = { TextButton(onClick = onDismiss) { Text("취소") } }
     )
 }
 
-/**
- * Share Bottom Sheet — 파일 형태 선택
- * Plain text / .md 파일 / .txt 파일 / 녹음포함(회의록 md + mp3)
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ShareBottomSheet(
@@ -775,63 +828,39 @@ private fun ShareBottomSheet(
 ) {
     val sheetState = rememberModalBottomSheetState()
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState
-    ) {
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp)
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)
         ) {
-            Text(
-                "공유할 파일 형태 선택",
-                fontWeight = FontWeight.Bold, fontSize = 16.sp,
-                modifier = Modifier.padding(bottom = 4.dp)
-            )
-            Text(
-                meeting.fileName.ifEmpty { "제목 없음" },
-                fontSize = 13.sp, color = TextLight,
-                maxLines = 1, overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(bottom = 16.dp)
-            )
+            Text("공유할 파일 형태 선택", fontWeight = FontWeight.Bold, fontSize = 16.sp,
+                modifier = Modifier.padding(bottom = 4.dp))
+            Text(meeting.fileName.ifEmpty { "제목 없음" }, fontSize = 13.sp, color = TextLight,
+                maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(bottom = 16.dp))
 
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                // 1) Plain text
                 Button(
                     onClick = { viewModel.shareByFormat("plain_text") },
                     modifier = Modifier.fillMaxWidth().height(48.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = Accent)
-                ) {
-                    Text("📝  Plain Text", fontSize = 14.sp)
-                }
+                ) { Text("Plain Text", fontSize = 14.sp) }
 
-                // 2) .md 파일
                 Button(
                     onClick = { viewModel.shareByFormat("md_file") },
                     modifier = Modifier.fillMaxWidth().height(48.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = Accent)
-                ) {
-                    Text("📄  회의록 (.md 파일)", fontSize = 14.sp)
-                }
+                ) { Text("회의록 (.md 파일)", fontSize = 14.sp) }
 
-                // 3) .txt 파일
                 Button(
                     onClick = { viewModel.shareByFormat("txt_file") },
                     modifier = Modifier.fillMaxWidth().height(48.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = Accent)
-                ) {
-                    Text("📃  회의록 (.txt 파일)", fontSize = 14.sp)
-                }
+                ) { Text("회의록 (.txt 파일)", fontSize = 14.sp) }
 
-                // 4) 녹음포함 (회의록 md + mp3)
                 Button(
                     onClick = { viewModel.shareByFormat("with_audio") },
                     modifier = Modifier.fillMaxWidth().height(48.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF5C6BC0))
-                ) {
-                    Text("🎵  녹음포함 (회의록 + MP3)", fontSize = 14.sp)
-                }
+                ) { Text("녹음포함 (회의록 + MP3)", fontSize = 14.sp) }
             }
 
             Spacer(Modifier.height(20.dp))

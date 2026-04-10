@@ -204,8 +204,12 @@ private fun EngineSettingsTab(
             Divider(modifier = Modifier.padding(vertical = 8.dp))
             Spacer(Modifier.height(4.dp))
             listOf(
-                "speaker" to "화자 중심", "topic" to "주제 중심",
-                "formal_md" to "회의 양식", "flow" to "흐름 중심",
+                "speaker" to "주간회의 (화자 중심)",
+                "topic" to "다자간 협의 (안건 중심)",
+                "formal_md" to "회의록(업무)",
+                "ir_md" to "IR 미팅",
+                "phone" to "전화통화 메모",
+                "flow" to "네트워킹(티타임)",
                 "lecture_md" to "강의 요약"
             ).forEach { (value, label) ->
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {

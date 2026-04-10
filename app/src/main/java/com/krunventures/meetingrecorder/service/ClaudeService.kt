@@ -16,9 +16,11 @@ class ClaudeService {
         private const val API_URL = "https://api.anthropic.com/v1/messages"
     }
 
+    // ★ v3.0: Read Timeout 300초→1800초 (30분) — 긴 회의록 요약 시 타임아웃 방지
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(300, TimeUnit.SECONDS)
+        .readTimeout(1800, TimeUnit.SECONDS)
+        .writeTimeout(300, TimeUnit.SECONDS)
         .build()
     private val gson = Gson()
 
@@ -69,6 +71,8 @@ class ClaudeService {
         val template = when (summaryMode) {
             "topic" -> GeminiService.SUMMARY_TOPIC
             "formal_md" -> GeminiService.SUMMARY_FORMAL_MD
+            "ir_md" -> GeminiService.SUMMARY_IR_MD
+            "phone" -> GeminiService.SUMMARY_PHONE
             "flow" -> GeminiService.SUMMARY_FLOW
             "lecture_md" -> GeminiService.SUMMARY_LECTURE_MD
             else -> GeminiService.SUMMARY_SPEAKER
