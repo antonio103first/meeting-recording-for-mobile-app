@@ -23,6 +23,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.graphics.Color
 import com.krunventures.meetingrecorder.ui.theme.*
 import com.krunventures.meetingrecorder.viewmodel.SettingsUiState
 import com.krunventures.meetingrecorder.viewmodel.SettingsViewModel
@@ -89,6 +90,18 @@ fun SettingsScreen(viewModel: SettingsViewModel) {
         }
     }
 
+    // ★ v3.0: Obsidian vault 폴더 선택 launcher
+    val obsidianPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri != null) {
+            context.contentResolver.takePersistableUriPermission(
+                uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+            viewModel.setObsidianVaultDir(uri.toString())
+        }
+    }
+
     var selectedTab by remember { mutableStateOf(0) }
     val tabs = listOf("⚙ 엔진 설정", "🔑 API 키", "💾 저장/Drive")
 
@@ -128,7 +141,7 @@ fun SettingsScreen(viewModel: SettingsViewModel) {
             when (selectedTab) {
                 0 -> EngineSettingsTab(viewModel, state)
                 1 -> ApiKeysTab(viewModel, state)
-                2 -> StorageDriveTab(viewModel, state, safBasePickerLauncher, safAudioPickerLauncher, safSttPickerLauncher, safSummaryPickerLauncher, signInLauncher)
+                2 -> StorageDriveTab(viewModel, state, safBasePickerLauncher, safAudioPickerLauncher, safSttPickerLauncher, safSummaryPickerLauncher, obsidianPickerLauncher, signInLauncher)
             }
             Spacer(Modifier.height(80.dp))
         }
@@ -458,6 +471,7 @@ private fun StorageDriveTab(
     safAudioPickerLauncher: androidx.activity.result.ActivityResultLauncher<android.net.Uri?>,
     safSttPickerLauncher: androidx.activity.result.ActivityResultLauncher<android.net.Uri?>,
     safSummaryPickerLauncher: androidx.activity.result.ActivityResultLauncher<android.net.Uri?>,
+    obsidianPickerLauncher: androidx.activity.result.ActivityResultLauncher<android.net.Uri?>,
     signInLauncher: androidx.activity.result.ActivityResultLauncher<android.content.Intent>
 ) {
     // Local Storage Path — Separate Folders (v2.0)
@@ -551,6 +565,41 @@ private fun StorageDriveTab(
 
             if (state.userSelectedBaseDir.isNotEmpty()) {
                 Text("✅ 커스텀 경로 설정됨", fontSize = 12.sp, color = Success, modifier = Modifier.padding(top = 8.dp))
+            }
+        }
+    }
+
+    // ★ v3.0: Obsidian Vault 저장 설정
+    Card(colors = CardDefaults.cardColors(containerColor = CardBg), elevation = CardDefaults.cardElevation(2.dp)) {
+        Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+            Text("📓 Obsidian Vault 저장", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = TextDark)
+            Divider(modifier = Modifier.padding(vertical = 8.dp))
+            Text("회의록 저장 시 Obsidian vault 폴더에 .md 파일로 자동 저장합니다.",
+                fontSize = 12.sp, color = TextLight)
+            Spacer(Modifier.height(8.dp))
+
+            if (state.obsidianVaultDir.isNotEmpty()) {
+                Text("✅ Obsidian 폴더 설정됨", fontSize = 12.sp, color = Success)
+                Spacer(Modifier.height(4.dp))
+            }
+
+            Button(
+                onClick = { obsidianPickerLauncher.launch(null) },
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7C3AED)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Filled.Folder, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Obsidian vault 폴더 선택", fontSize = 13.sp)
+            }
+
+            if (state.obsidianVaultDir.isNotEmpty()) {
+                TextButton(
+                    onClick = { viewModel.setObsidianVaultDir("") },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Obsidian 저장 해제", fontSize = 12.sp, color = Danger)
+                }
             }
         }
     }

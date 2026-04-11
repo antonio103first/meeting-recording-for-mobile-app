@@ -738,6 +738,20 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                     Log.d(TAG, "Summary SAF direct save: $summarySafSaved (uri=$safResult)")
                 }
 
+                // ★ v3.0: Obsidian vault에 회의록을 .md 파일로 저장
+                var obsidianSaved = false
+                val obsidianUri = config.obsidianVaultDir
+                if (obsidianUri.isNotBlank() && summaryText.isNotBlank()) {
+                    try {
+                        val mdFileName = "${fileName}.md"
+                        val obsResult = config.writeTextToSafDir(summaryText, obsidianUri, mdFileName)
+                        obsidianSaved = obsResult != null
+                        Log.d(TAG, "Obsidian vault save: $obsidianSaved (uri=$obsResult)")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Obsidian vault save failed", e)
+                    }
+                }
+
                 // Step 6: Save to DB (최종 경로 반영 — STT와 요약 경로 분리)
                 try {
                     dao.insert(Meeting(
@@ -765,6 +779,9 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 if (summarySafUri.isNotBlank()) {
                     safResults.add(if (summarySafSaved) "✅회의록" else "❌회의록")
+                }
+                if (obsidianUri.isNotBlank()) {
+                    safResults.add(if (obsidianSaved) "✅Obsidian" else "❌Obsidian")
                 }
                 if (safResults.isNotEmpty()) {
                     Log.d(TAG, "SAF direct save results: ${safResults.joinToString()}")

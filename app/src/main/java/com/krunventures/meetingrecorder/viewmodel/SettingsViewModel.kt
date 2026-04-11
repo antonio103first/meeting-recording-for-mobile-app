@@ -37,6 +37,7 @@ data class SettingsUiState(
     val userSelectedAudioDir: String = "",
     val userSelectedSttDir: String = "",
     val userSelectedSummaryDir: String = "",
+    val obsidianVaultDir: String = "",
     val safAudioDisplayPath: String = "",
     val safSttDisplayPath: String = "",
     val safSummaryDisplayPath: String = "",
@@ -88,6 +89,7 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         userSelectedAudioDir = config.userSelectedAudioDir,
         userSelectedSttDir = config.userSelectedSttDir,
         userSelectedSummaryDir = config.userSelectedSummaryDir,
+        obsidianVaultDir = config.obsidianVaultDir,
         safAudioDisplayPath = config.safUriToDisplayPath(config.getSafUriForAudio()),
         safSttDisplayPath = config.safUriToDisplayPath(config.getSafUriForStt()),
         safSummaryDisplayPath = config.safUriToDisplayPath(config.getSafUriForSummary()),
@@ -173,6 +175,11 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
             summarySaveDir = config.summarySaveDir.absolutePath,
             safSummaryDisplayPath = config.safUriToDisplayPath(uri)
         )
+    }
+
+    fun setObsidianVaultDir(uri: String) {
+        config.obsidianVaultDir = uri
+        _uiState.value = _uiState.value.copy(obsidianVaultDir = uri)
     }
 
     fun testGemini() {

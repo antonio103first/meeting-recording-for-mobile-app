@@ -79,6 +79,11 @@ class ConfigManager(private val context: Context) {
         get() = prefs.getString("user_selected_summary_dir", "") ?: ""
         set(v) = prefs.edit().putString("user_selected_summary_dir", v).apply()
 
+    // ★ v3.0: Obsidian vault 저장 경로 (SAF URI)
+    var obsidianVaultDir: String
+        get() = prefs.getString("obsidian_vault_dir", "") ?: ""
+        set(v) = prefs.edit().putString("obsidian_vault_dir", v).apply()
+
     var recordingDir: String
         get() {
             // 1. Check if user has selected a SAF directory
