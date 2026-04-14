@@ -45,19 +45,27 @@ class AudioRecorderManager(private val context: Context) {
     private var timerThread: Thread? = null
     @Volatile private var timerRunning = false
 
-    // ★ v3.0: 녹음 중 인터럽트 완전 차단 모드
+    // ★ v3.0.2: 녹음 중 인터럽트 완전 차단 + 자동 포커스 재요청
     // 전화, 카메라, 다른 앱의 마이크 점유 등 모든 오디오 포커스 변경을 무시하고 녹음 계속 진행
     private val audioFocusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
         when (focusChange) {
             AudioManager.AUDIOFOCUS_LOSS -> {
-                Log.w(TAG, "Audio focus lost permanently — 녹음 계속 진행 (v3.0 인터럽트 차단)")
-                // ★ v3.0: 녹음을 중단하지 않음. 로그만 기록
+                Log.w(TAG, "Audio focus lost permanently — 녹음 계속 진행 + 포커스 재요청")
                 _audioFocusLost.value = true
+                // ★ v3.0.2: 포커스를 잃어도 즉시 다시 요청하여 마이크 점유 유지
+                if (_state.value == RecordingState.RECORDING) {
+                    val reacquired = requestAudioFocus()
+                    Log.d(TAG, "Audio focus re-request after LOSS: $reacquired")
+                }
             }
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
-                Log.w(TAG, "Audio focus lost temporarily — 녹음 계속 진행 (v3.0 인터럽트 차단)")
-                // ★ v3.0: 일시정지하지 않음
+                Log.w(TAG, "Audio focus lost temporarily — 녹음 계속 진행 + 포커스 재요청")
                 _audioFocusLost.value = true
+                // ★ v3.0.2: 일시적 손실에도 재요청
+                if (_state.value == RecordingState.RECORDING) {
+                    val reacquired = requestAudioFocus()
+                    Log.d(TAG, "Audio focus re-request after TRANSIENT: $reacquired")
+                }
             }
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
                 Log.i(TAG, "Audio focus ducked (volume reduced) — 녹음 계속 진행")
@@ -100,7 +108,8 @@ class AudioRecorderManager(private val context: Context) {
                 MediaRecorder()
             }).apply {
                 try {
-                    setAudioSource(MediaRecorder.AudioSource.MIC)
+                    // ★ v3.0.2: VOICE_RECOGNITION은 시스템 우선순위가 높아 다른 앱에 마이크를 뺏기기 어려움
+                    setAudioSource(MediaRecorder.AudioSource.VOICE_RECOGNITION)
                     setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
                     setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
                     setAudioEncodingBitRate(32000)   // 32kbps AAC — 음성 녹음 최적 (3시간=43MB, STT 인식률 동일)

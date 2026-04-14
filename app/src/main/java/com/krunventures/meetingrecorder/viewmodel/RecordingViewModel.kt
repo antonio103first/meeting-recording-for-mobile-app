@@ -356,8 +356,16 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                     // 알림 표시
                     NotificationHelper.notifyRecordingSaved(getApplication(), savedFile.name)
 
-                    // ★ SAF 복사는 confirmFileName()에서 최종 이름 확정 후 한 번만 실행
-                    // (여기서 임시이름으로 SAF 복사하면 중복 파일 생성됨)
+                    // ★ v3.0.2: SAF 폴더에도 즉시 저장 (임시이름으로 저장, 나중에 confirmFileName에서 최종이름으로 다시 저장)
+                    try {
+                        val audioSafUri = config.getSafUriForAudio()
+                        if (audioSafUri.isNotBlank()) {
+                            val safResult = config.writeFileToSafDir(savedFile, audioSafUri)
+                            Log.d(TAG, "Audio SAF immediate save: ${safResult != null}")
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Audio SAF immediate save failed (non-critical)", e)
+                    }
 
                     // 2) Google Drive 업로드 (녹음파일만 먼저)
                     if (config.driveAutoUpload) {
@@ -594,6 +602,23 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                 // ★ V2.0: STT 변환 완료 알림
                 NotificationHelper.notifySttComplete(getApplication(), audioFile.name)
 
+                // ★ v3.0.2: STT 완료 즉시 앱 전용 디렉토리에 임시 저장 (데이터 유실 방지)
+                val tempSttFileName = "STT_${java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault()).format(java.util.Date())}"
+                try {
+                    val sttDir = config.sttSaveDir
+                    val tempSttFile = fileManager.saveSttText(sttText, sttDir, tempSttFileName)
+                    Log.d(TAG, "STT immediate save: ${tempSttFile.getOrNull()?.absolutePath}")
+                    // SAF에도 즉시 저장
+                    val sttSafUriImmediate = config.getSafUriForStt()
+                    if (sttSafUriImmediate.isNotBlank()) {
+                        config.writeTextToSafDir(sttText, sttSafUriImmediate, "${tempSttFileName}.txt")
+                        Log.d(TAG, "STT immediate SAF save done")
+                    }
+                    updateUiState { it.copy(saveStatus = "✅ STT 저장 완료 — AI 요약 진행 중...") }
+                } catch (e: Exception) {
+                    Log.e(TAG, "STT immediate save failed (non-critical)", e)
+                }
+
                 // Step 2: Summary
                 val sumResult = runSummary(sttText)
                 if (!sumResult.first) {
@@ -608,6 +633,29 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
 
                 // ★ V2.0: AI 요약 완료 알림
                 NotificationHelper.notifySummaryComplete(getApplication(), audioFile.name)
+
+                // ★ v3.0.2: 회의록 완료 즉시 앱 전용 디렉토리에 임시 저장 (데이터 유실 방지)
+                val tempSummaryFileName = "요약_${java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault()).format(java.util.Date())}"
+                try {
+                    val summaryDir = config.summarySaveDir
+                    val tempSummaryFile = fileManager.saveSummaryText(summaryText, summaryDir, tempSummaryFileName)
+                    Log.d(TAG, "Summary immediate save: ${tempSummaryFile.getOrNull()?.absolutePath}")
+                    // SAF에도 즉시 저장
+                    val summarySafUriImmediate = config.getSafUriForSummary()
+                    if (summarySafUriImmediate.isNotBlank()) {
+                        config.writeTextToSafDir(summaryText, summarySafUriImmediate, "${tempSummaryFileName}.txt")
+                        Log.d(TAG, "Summary immediate SAF save done")
+                    }
+                    // Obsidian에도 즉시 저장
+                    val obsidianUriImmediate = config.obsidianVaultDir
+                    if (obsidianUriImmediate.isNotBlank()) {
+                        config.writeTextToSafDir(summaryText, obsidianUriImmediate, "${tempSummaryFileName}.md")
+                        Log.d(TAG, "Obsidian immediate save done")
+                    }
+                    updateUiState { it.copy(saveStatus = "✅ 회의록 저장 완료 — 파일이름을 입력해주세요...") }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Summary immediate save failed (non-critical)", e)
+                }
 
                 // Step 3: Extract metrics (optional — 실패해도 무시, 저장 대기 전 실행)
                 try {
@@ -1002,11 +1050,13 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 if (result.first) return result  // 성공 시 즉시 반환
                 lastError = result.second
-                if (!result.second.contains("timeout", ignoreCase = true) &&
-                    !result.second.contains("timed out", ignoreCase = true) &&
-                    !result.second.contains("SocketTimeout", ignoreCase = true)) {
-                    return result  // 타임아웃이 아닌 오류는 재시도 안 함
+                // ★ v3.0.2: 네트워크/타임아웃 관련 에러만 재시도
+                val retryKeywords = listOf("timeout", "timed out", "SocketTimeout", "연결", "네트워크", "인터넷", "서버", "SSL")
+                val shouldRetry = retryKeywords.any { result.second.contains(it, ignoreCase = true) }
+                if (!shouldRetry) {
+                    return result  // 네트워크/타임아웃 외 오류는 재시도 안 함
                 }
+                Log.w(TAG, "Summary failed (retryable): ${result.second.take(100)}")
             } catch (e: Exception) {
                 Log.e(TAG, "Summary attempt $attempt failed: ${e.message}", e)
                 lastError = "요약 중 오류: ${e.message?.take(200) ?: "알 수 없는 오류"}"
