@@ -30,6 +30,7 @@ data class SettingsUiState(
     val aiEngine: String = "gemini",
     val summaryMode: String = "speaker",
     val numSpeakers: Int = 2,
+    val autoSpeakerDetection: Boolean = true,
     val audioSaveDir: String = "",
     val sttSaveDir: String = "",
     val summarySaveDir: String = "",
@@ -82,6 +83,7 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         aiEngine = config.aiEngine,
         summaryMode = config.summaryMode,
         numSpeakers = config.numSpeakers,
+        autoSpeakerDetection = config.autoSpeakerDetection,
         audioSaveDir = config.audioSaveDir.absolutePath,
         sttSaveDir = config.sttSaveDir.absolutePath,
         summarySaveDir = config.summarySaveDir.absolutePath,
@@ -138,6 +140,11 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     fun setNumSpeakers(num: Int) {
         config.numSpeakers = num
         _uiState.value = _uiState.value.copy(numSpeakers = num)
+    }
+
+    fun setAutoSpeakerDetection(auto: Boolean) {
+        config.autoSpeakerDetection = auto
+        _uiState.value = _uiState.value.copy(autoSpeakerDetection = auto)
     }
 
     fun setUserSelectedBaseDir(uri: String) {

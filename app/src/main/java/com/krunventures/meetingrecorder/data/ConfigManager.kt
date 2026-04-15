@@ -389,6 +389,20 @@ class ConfigManager(private val context: Context) {
         get() = prefs.getInt("num_speakers", 2)
         set(v) = prefs.edit().putInt("num_speakers", v).apply()
 
+    // ★ v3.1.1: 화자 수 자동/수동 모드 (기본: 자동)
+    var autoSpeakerDetection: Boolean
+        get() = prefs.getBoolean("auto_speaker_detection", true)
+        set(v) = prefs.edit().putBoolean("auto_speaker_detection", v).apply()
+
+    /**
+     * STT 호출 시 사용할 화자 수 반환
+     * - 자동 모드: 0 (AI가 자동 판단)
+     * - 수동 모드: 사용자가 설정한 numSpeakers 값
+     */
+    fun getEffectiveNumSpeakers(): Int {
+        return if (autoSpeakerDetection) 0 else numSpeakers
+    }
+
     fun isConfigComplete(): Boolean {
         val hasGemini = geminiApiKey.isNotBlank()
         val hasClova = clovaInvokeUrl.isNotBlank() && clovaSecretKey.isNotBlank()

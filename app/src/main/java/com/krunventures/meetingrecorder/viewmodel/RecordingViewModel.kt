@@ -955,7 +955,7 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                         audioFile = audioFile,
                         invokeUrl = config.clovaInvokeUrl,
                         secretKey = config.clovaSecretKey,
-                        numSpeakers = config.numSpeakers,
+                        numSpeakers = config.getEffectiveNumSpeakers(),
                         onProgress = safeOnProgress,
                         onStatus = safeOnStatus
                     )
@@ -965,7 +965,7 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                     val result = chatGptService.transcribe(
                         audioFile = audioFile,
                         apiKey = config.chatGptApiKey,
-                        numSpeakers = config.numSpeakers,
+                        numSpeakers = config.getEffectiveNumSpeakers(),
                         onProgress = safeOnProgress,
                         onStatus = safeOnStatus
                     )
@@ -975,7 +975,7 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                     val result = geminiService.transcribe(
                         audioFile = audioFile,
                         apiKey = config.geminiApiKey,
-                        numSpeakers = config.numSpeakers,
+                        numSpeakers = config.getEffectiveNumSpeakers(),
                         onProgress = safeOnProgress,
                         onStatus = safeOnStatus
                     )

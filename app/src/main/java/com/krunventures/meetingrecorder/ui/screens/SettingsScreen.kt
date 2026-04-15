@@ -233,27 +233,50 @@ private fun EngineSettingsTab(
         }
     }
 
-    // Number of Speakers
+    // Number of Speakers — 자동/수동 선택
     Card(colors = CardDefaults.cardColors(containerColor = CardBg), elevation = CardDefaults.cardElevation(2.dp)) {
         Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
             Text("화자 수", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = TextDark)
-            Spacer(Modifier.height(8.dp))
             Divider(modifier = Modifier.padding(vertical = 8.dp))
-            Spacer(Modifier.height(4.dp))
-            var numSpeakersText by remember { mutableStateOf(state.numSpeakers.toString()) }
-            OutlinedTextField(
-                value = numSpeakersText,
-                onValueChange = { newVal ->
-                    numSpeakersText = newVal
-                    val num = newVal.toIntOrNull() ?: 2
-                    if (num > 0 && num <= 20) {
-                        viewModel.setNumSpeakers(num)
-                    }
-                },
-                label = { Text("화자 수 (1-20)") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true
-            )
+
+            // 자동/수동 토글
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    if (state.autoSpeakerDetection) "자동 감지 (AI가 화자 수를 판단)"
+                    else "수동 설정",
+                    fontSize = 14.sp, modifier = Modifier.weight(1f)
+                )
+                Switch(
+                    checked = state.autoSpeakerDetection,
+                    onCheckedChange = { viewModel.setAutoSpeakerDetection(it) },
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Accent,
+                        checkedTrackColor = Accent.copy(alpha = 0.3f)
+                    )
+                )
+            }
+
+            // 수동 모드일 때만 입력 필드 표시
+            if (!state.autoSpeakerDetection) {
+                Spacer(Modifier.height(8.dp))
+                var numSpeakersText by remember { mutableStateOf(state.numSpeakers.toString()) }
+                OutlinedTextField(
+                    value = numSpeakersText,
+                    onValueChange = { newVal ->
+                        numSpeakersText = newVal
+                        val num = newVal.toIntOrNull() ?: 2
+                        if (num > 0 && num <= 20) {
+                            viewModel.setNumSpeakers(num)
+                        }
+                    },
+                    label = { Text("화자 수 (1-20)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+            }
         }
     }
 }
