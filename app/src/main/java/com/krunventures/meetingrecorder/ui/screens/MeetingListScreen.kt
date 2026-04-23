@@ -315,6 +315,7 @@ fun MeetingListScreen(viewModel: MeetingListViewModel) {
             meeting = state.targetMeeting!!,
             onCopy = { viewModel.copyMeetingTextToClipboard() },
             onRename = { viewModel.showRenameDialog() },
+            onSpeakerEdit = { viewModel.showSpeakerDialog() },
             onDelete = { viewModel.showDeleteDialog() },
             onDeleteFilesOnly = { viewModel.deleteFilesOnly() },
             onDismiss = { viewModel.dismissActionMenu() }
@@ -586,6 +587,7 @@ private fun ActionMenuDialog(
     meeting: Meeting,
     onCopy: () -> Unit,
     onRename: () -> Unit,
+    onSpeakerEdit: () -> Unit,
     onDelete: () -> Unit,
     onDeleteFilesOnly: () -> Unit,
     onDismiss: () -> Unit
@@ -620,6 +622,20 @@ private fun ActionMenuDialog(
                         Icon(Icons.Filled.Edit, null, modifier = Modifier.size(20.dp), tint = Accent)
                         Spacer(Modifier.width(12.dp))
                         Text("이름 변경", fontSize = 15.sp, color = TextDark)
+                    }
+                }
+
+                // ★ v3.2: 화자 이름 수정 메뉴
+                if (meeting.summaryText.isNotBlank()) {
+                    TextButton(onClick = onSpeakerEdit, modifier = Modifier.fillMaxWidth()) {
+                        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Filled.Person, null, modifier = Modifier.size(20.dp), tint = Accent)
+                            Spacer(Modifier.width(12.dp))
+                            Column {
+                                Text("화자 이름 수정", fontSize = 15.sp, color = TextDark)
+                                Text("회의록 내 화자 표기를 실명으로 변경", fontSize = 11.sp, color = TextLight)
+                            }
+                        }
                     }
                 }
 
