@@ -766,12 +766,32 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
  * - 스크롤과 텍스트 선택(길게 눌러 복사)이 동시에 가능
  */
 @Composable
+/**
+ * ★ v3.3: 전체화면 다이얼로그 — 찾기/바꾸기 기능 포함
+ */
 private fun FullScreenTextDialog(
     title: String,
     text: String,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onTextChanged: ((String) -> Unit)? = null
 ) {
-    val htmlContent = remember(text) { markdownToHtml(text) }
+    var currentText by remember(text) { mutableStateOf(text) }
+    val htmlContent = remember(currentText) { markdownToHtml(currentText) }
+
+    var showFindReplace by remember { mutableStateOf(false) }
+    var findQuery by remember { mutableStateOf("") }
+    var replaceQuery by remember { mutableStateOf("") }
+    var matchCount by remember { mutableStateOf(0) }
+    var replaceResultMsg by remember { mutableStateOf("") }
+
+    LaunchedEffect(findQuery, currentText) {
+        matchCount = if (findQuery.isNotEmpty()) {
+            var count = 0; var start = 0
+            while (true) { val idx = currentText.indexOf(findQuery, start); if (idx < 0) break; count++; start = idx + findQuery.length }
+            count
+        } else 0
+        replaceResultMsg = ""
+    }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -794,22 +814,95 @@ private fun FullScreenTextDialog(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(title, fontWeight = FontWeight.Bold, fontSize = 18.sp,
-                        color = MaterialTheme.colorScheme.onSurface)
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f))
+                    IconButton(onClick = { showFindReplace = !showFindReplace }) {
+                        Icon(Icons.Filled.FindReplace, "찾기/바꾸기",
+                            tint = if (showFindReplace) Color(0xFF2196F3) else MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                     IconButton(onClick = onDismiss) {
                         Icon(Icons.Filled.Close, "닫기")
                     }
                 }
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
 
-                // 안내 문구
+                // ── 찾기/바꾸기 바 ──
+                if (showFindReplace) {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                    ) {
+                        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                OutlinedTextField(
+                                    value = findQuery,
+                                    onValueChange = { findQuery = it },
+                                    placeholder = { Text("찾기", fontSize = 13.sp) },
+                                    modifier = Modifier.weight(1f).height(48.dp),
+                                    singleLine = true,
+                                    textStyle = LocalTextStyle.current.copy(fontSize = 13.sp)
+                                )
+                                Text(
+                                    if (findQuery.isNotEmpty()) "${matchCount}건" else "",
+                                    fontSize = 12.sp,
+                                    color = if (matchCount > 0) Color(0xFF2196F3) else Color.Gray,
+                                    modifier = Modifier.width(36.dp)
+                                )
+                            }
+                            Spacer(Modifier.height(4.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                OutlinedTextField(
+                                    value = replaceQuery,
+                                    onValueChange = { replaceQuery = it },
+                                    placeholder = { Text("바꿀 내용", fontSize = 13.sp) },
+                                    modifier = Modifier.weight(1f).height(48.dp),
+                                    singleLine = true,
+                                    textStyle = LocalTextStyle.current.copy(fontSize = 13.sp)
+                                )
+                                Button(
+                                    onClick = {
+                                        if (findQuery.isNotEmpty() && matchCount > 0) {
+                                            val replaced = matchCount
+                                            currentText = currentText.replace(findQuery, replaceQuery)
+                                            onTextChanged?.invoke(currentText)
+                                            replaceResultMsg = "${replaced}건 변경 완료"
+                                            findQuery = ""; replaceQuery = ""
+                                        }
+                                    },
+                                    enabled = findQuery.isNotEmpty() && matchCount > 0,
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2196F3)),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                                    modifier = Modifier.height(36.dp)
+                                ) {
+                                    Text("전체 바꾸기", fontSize = 12.sp)
+                                }
+                            }
+                            if (replaceResultMsg.isNotEmpty()) {
+                                Text(replaceResultMsg, fontSize = 11.sp, color = Color(0xFF4CAF50),
+                                    modifier = Modifier.padding(top = 4.dp))
+                            }
+                        }
+                    }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                }
+
                 Text(
-                    "길게 눌러 원하는 부분을 선택하여 복사하세요",
+                    "길게 눌러 선택 복사 | 🔍 찾기/바꾸기로 화자 이름 수정",
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
-                // WebView — 마크다운을 HTML로 렌더링, 스크롤/복사 자유
+                // WebView
                 AndroidView(
                     factory = { context ->
                         WebView(context).apply {

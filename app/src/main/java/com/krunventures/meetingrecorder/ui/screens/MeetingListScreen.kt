@@ -47,6 +47,8 @@ fun MeetingListScreen(viewModel: MeetingListViewModel) {
     var showFullScreen by remember { mutableStateOf(false) }
     var fullScreenTitle by remember { mutableStateOf("") }
     var fullScreenText by remember { mutableStateOf("") }
+    var fullScreenMeeting by remember { mutableStateOf<Meeting?>(null) }
+    var fullScreenType by remember { mutableStateOf("summary") } // "stt" or "summary"
 
     // 상태 메시지 스낵바
     val snackbarHostState = remember { SnackbarHostState() }
@@ -137,11 +139,15 @@ fun MeetingListScreen(viewModel: MeetingListViewModel) {
                                             1 -> if (meeting.sttText.isNotBlank()) {
                                                 fullScreenTitle = "${meeting.fileName} — STT 원문"
                                                 fullScreenText = meeting.sttText
+                                                fullScreenMeeting = meeting
+                                                fullScreenType = "stt"
                                                 showFullScreen = true
                                             }
                                             2 -> if (meeting.summaryText.isNotBlank()) {
                                                 fullScreenTitle = "${meeting.fileName} — 회의록"
                                                 fullScreenText = meeting.summaryText
+                                                fullScreenMeeting = meeting
+                                                fullScreenType = "summary"
                                                 showFullScreen = true
                                             }
                                             else -> { /* MP3 탭은 클릭 시 별도 동작 없음 */ }
@@ -300,12 +306,23 @@ fun MeetingListScreen(viewModel: MeetingListViewModel) {
         }
     }
 
-    // === 전체화면 다이얼로그 — 독립 스크롤 + 부분 선택 복사 + 전체복사 버튼 ===
+    // === 전체화면 다이얼로그 — 독립 스크롤 + 부분 선택 복사 + 전체복사 + 찾기/바꾸기 ===
     if (showFullScreen) {
         MeetingFullScreenTextDialog(
             title = fullScreenTitle,
             text = fullScreenText,
-            onDismiss = { showFullScreen = false }
+            onDismiss = { showFullScreen = false },
+            onTextChanged = { newText ->
+                fullScreenText = newText
+                // DB에 반영
+                fullScreenMeeting?.let { m ->
+                    if (fullScreenType == "summary") {
+                        viewModel.updateSummaryText(m.id, newText)
+                    } else {
+                        viewModel.updateSttText(m.id, newText)
+                    }
+                }
+            }
         )
     }
 
@@ -402,16 +419,45 @@ fun MeetingListScreen(viewModel: MeetingListViewModel) {
 }
 
 /**
- * 전체화면 마크다운 렌더링 다이얼로그 + 전체복사 버튼
+ * ★ v3.3: 전체화면 마크다운 렌더링 다이얼로그
+ * - 전체복사 버튼
+ * - 찾기/바꾸기 바 (화자 이름 수정 등에 활용)
+ * - 바꾸기 실행 시 onTextChanged 콜백으로 DB 반영
  */
 @Composable
 private fun MeetingFullScreenTextDialog(
     title: String,
     text: String,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onTextChanged: ((String) -> Unit)? = null
 ) {
     val context = LocalContext.current
-    val htmlContent = remember(text) { markdownToHtml(text) }
+    // 편집 가능한 텍스트 상태
+    var currentText by remember(text) { mutableStateOf(text) }
+    val htmlContent = remember(currentText) { markdownToHtml(currentText) }
+
+    // 찾기/바꾸기 상태
+    var showFindReplace by remember { mutableStateOf(false) }
+    var findQuery by remember { mutableStateOf("") }
+    var replaceQuery by remember { mutableStateOf("") }
+    var matchCount by remember { mutableStateOf(0) }
+    var replaceResultMsg by remember { mutableStateOf("") }
+
+    // 매치 수 계산
+    LaunchedEffect(findQuery, currentText) {
+        matchCount = if (findQuery.isNotEmpty()) {
+            var count = 0
+            var startIndex = 0
+            while (true) {
+                val idx = currentText.indexOf(findQuery, startIndex)
+                if (idx < 0) break
+                count++
+                startIndex = idx + findQuery.length
+            }
+            count
+        } else 0
+        replaceResultMsg = ""
+    }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -425,7 +471,7 @@ private fun MeetingFullScreenTextDialog(
             shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
-                // 헤더
+                // ── 헤더 ──
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -442,10 +488,15 @@ private fun MeetingFullScreenTextDialog(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f)
                     )
-                    // ★ 전체복사 버튼
+                    // 찾기/바꾸기 토글
+                    IconButton(onClick = { showFindReplace = !showFindReplace }) {
+                        Icon(Icons.Filled.FindReplace, "찾기/바꾸기",
+                            tint = if (showFindReplace) Accent else MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    // 전체복사
                     IconButton(onClick = {
                         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        clipboard.setPrimaryClip(ClipData.newPlainText("회의록", text))
+                        clipboard.setPrimaryClip(ClipData.newPlainText("회의록", currentText))
                         Toast.makeText(context, "전체 내용 복사 완료", Toast.LENGTH_SHORT).show()
                     }) {
                         Icon(Icons.Filled.ContentCopy, "전체복사", tint = Accent)
@@ -456,9 +507,85 @@ private fun MeetingFullScreenTextDialog(
                 }
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
 
+                // ── 찾기/바꾸기 바 ──
+                if (showFindReplace) {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                    ) {
+                        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                            // 찾기 행
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                OutlinedTextField(
+                                    value = findQuery,
+                                    onValueChange = { findQuery = it },
+                                    placeholder = { Text("찾기", fontSize = 13.sp) },
+                                    modifier = Modifier.weight(1f).height(48.dp),
+                                    singleLine = true,
+                                    textStyle = LocalTextStyle.current.copy(fontSize = 13.sp)
+                                )
+                                Text(
+                                    if (findQuery.isNotEmpty()) "${matchCount}건" else "",
+                                    fontSize = 12.sp,
+                                    color = if (matchCount > 0) Accent else TextLight,
+                                    modifier = Modifier.width(36.dp)
+                                )
+                            }
+                            Spacer(Modifier.height(4.dp))
+                            // 바꾸기 행
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                OutlinedTextField(
+                                    value = replaceQuery,
+                                    onValueChange = { replaceQuery = it },
+                                    placeholder = { Text("바꿀 내용", fontSize = 13.sp) },
+                                    modifier = Modifier.weight(1f).height(48.dp),
+                                    singleLine = true,
+                                    textStyle = LocalTextStyle.current.copy(fontSize = 13.sp)
+                                )
+                                Button(
+                                    onClick = {
+                                        if (findQuery.isNotEmpty() && matchCount > 0) {
+                                            val replaced = matchCount
+                                            currentText = currentText.replace(findQuery, replaceQuery)
+                                            onTextChanged?.invoke(currentText)
+                                            replaceResultMsg = "${replaced}건 변경 완료"
+                                            findQuery = ""
+                                            replaceQuery = ""
+                                        }
+                                    },
+                                    enabled = findQuery.isNotEmpty() && matchCount > 0,
+                                    colors = ButtonDefaults.buttonColors(containerColor = Accent),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                                    modifier = Modifier.height(36.dp)
+                                ) {
+                                    Text("전체 바꾸기", fontSize = 12.sp)
+                                }
+                            }
+                            // 결과 메시지
+                            if (replaceResultMsg.isNotEmpty()) {
+                                Text(
+                                    replaceResultMsg,
+                                    fontSize = 11.sp,
+                                    color = Success,
+                                    modifier = Modifier.padding(top = 4.dp)
+                                )
+                            }
+                        }
+                    }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                }
+
                 // 안내 문구
                 Text(
-                    "길게 눌러 선택 복사 | 우측 상단 아이콘으로 전체 복사",
+                    "길게 눌러 선택 복사 | 🔍 찾기/바꾸기로 화자 이름 수정",
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant

@@ -32,6 +32,13 @@ interface MeetingDao {
     @Query("UPDATE meetings SET speakerMap = :speakerMap WHERE id = :id")
     suspend fun updateSpeakerMap(id: Int, speakerMap: String?)
 
+    // ★ v3.3: 찾기/바꾸기에서 개별 텍스트 업데이트
+    @Query("UPDATE meetings SET summaryText = :summaryText WHERE id = :id")
+    suspend fun updateSummaryTextOnly(id: Int, summaryText: String)
+
+    @Query("UPDATE meetings SET sttText = :sttText WHERE id = :id")
+    suspend fun updateSttTextOnly(id: Int, sttText: String)
+
     @Query("SELECT * FROM meetings WHERE fileName = :fileName LIMIT 1")
     suspend fun getByFileName(fileName: String): Meeting?
 }

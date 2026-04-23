@@ -532,6 +532,29 @@ class MeetingListViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // === ★ v3.3: 찾기/바꾸기에서 텍스트 업데이트 ===
+    fun updateSummaryText(meetingId: Int, newText: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                dao.updateSummaryTextOnly(meetingId, newText)
+                Log.d(TAG, "Summary text updated for meeting $meetingId")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to update summary text", e)
+            }
+        }
+    }
+
+    fun updateSttText(meetingId: Int, newText: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                dao.updateSttTextOnly(meetingId, newText)
+                Log.d(TAG, "STT text updated for meeting $meetingId")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to update STT text", e)
+            }
+        }
+    }
+
     // === Share Sheet ===
     fun showShareSheet() {
         _uiState.value = _uiState.value.copy(
