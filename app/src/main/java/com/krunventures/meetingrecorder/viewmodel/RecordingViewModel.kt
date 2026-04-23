@@ -670,13 +670,14 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                 }
 
                 // Step 4: 파일이름 입력 다이얼로그 표시 → 사용자 확인 후 저장
-                val baseName = fileManager.getDefaultBaseName()
+                // ★ v3.2: 제목_날짜(요약모드) 형식으로 파일명 자동 생성
+                val suggestedName = fileManager.buildSuggestedFileName(summaryText, config.summaryMode)
                 pendingSttText = sttText
                 pendingSummaryText = summaryText
                 pendingAudioFile = audioFile
                 updateUiState { it.copy(
                     showFileNameDialog = true,
-                    suggestedFileName = "${baseName}_회의록",
+                    suggestedFileName = suggestedName,
                     saveStatus = "파일이름을 입력해주세요..."
                 ) }
                 // 파이프라인은 여기서 중단 — confirmFileName()에서 저장+업로드 이어짐
