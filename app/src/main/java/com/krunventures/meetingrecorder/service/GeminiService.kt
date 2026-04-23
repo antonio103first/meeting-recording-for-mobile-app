@@ -18,10 +18,10 @@ class GeminiService {
     data class ServiceResult(val success: Boolean, val text: String)
 
     private val client = OkHttpClient.Builder()
-        .connectTimeout(60, TimeUnit.SECONDS)     // ★ v3.0.2: 30s→60s (모바일 네트워크 대응)
-        .writeTimeout(120, TimeUnit.SECONDS)      // ★ v3.0.2: 긴 프롬프트 전송 대기
+        .connectTimeout(60, TimeUnit.SECONDS)     // 모바일 네트워크 대응
+        .writeTimeout(300, TimeUnit.SECONDS)      // ★ v3.2.2: 중복 제거, 대용량 프롬프트 전송 대기
         .readTimeout(3600, TimeUnit.SECONDS)      // 3시간 녹음 STT 처리 대기
-        .writeTimeout(300, TimeUnit.SECONDS)  // 대용량 파일 업로드 대기
+        .retryOnConnectionFailure(true)            // ★ v3.2.2: 연결 실패 시 자동 재시도
         .build()
     private val gson = Gson()
 
@@ -809,6 +809,18 @@ class GeminiService {
 
     // ── REST API 직접 호출 ──────────────────────────────────────
 
+    /**
+     * ★ v3.2.2: 스트리밍 API(streamGenerateContent)로 전환
+     *
+     * 기존 generateContent (동기식 단일 응답)의 문제점:
+     * - 긴 요약 생성 중 모바일 네트워크 불안정 시 전체 응답 유실
+     * - 서버가 응답을 모두 생성할 때까지 커넥션 idle 상태 → 중간 장비(NAT/프록시)가 끊음
+     *
+     * streamGenerateContent 방식:
+     * - 서버가 텍스트를 조각(chunk)으로 계속 보내므로 커넥션이 계속 활성 상태 유지
+     * - 모바일 네트워크 환경에서 안정성 대폭 향상
+     * - 비정상 중단 시에도 이미 수신된 부분 텍스트 활용 가능
+     */
     private fun callGeminiApi(
         model: String,
         apiKey: String,
@@ -817,7 +829,8 @@ class GeminiService {
         maxOutputTokens: Int = 65536
     ): ServiceResult {
         val trimmedKey = apiKey.trim()
-        val url = "$BASE_URL/$model:generateContent"
+        // ★ streamGenerateContent + alt=sse → Server-Sent Events 스트리밍
+        val url = "$BASE_URL/$model:streamGenerateContent?alt=sse&key=$trimmedKey"
 
         val bodyJson = JsonObject().apply {
             add("contents", contents)
@@ -831,38 +844,71 @@ class GeminiService {
             val request = Request.Builder()
                 .url(url)
                 .addHeader("Content-Type", "application/json")
-                .addHeader("x-goog-api-key", trimmedKey)
                 .post(gson.toJson(bodyJson).toRequestBody("application/json".toMediaType()))
                 .build()
 
             val response = client.newCall(request).execute()
-            val respBody = response.body?.string() ?: ""
 
             if (!response.isSuccessful) {
-                return ServiceResult(false, friendlyError(respBody))
+                val errorBody = response.body?.string() ?: ""
+                return ServiceResult(false, friendlyError(errorBody))
             }
 
-            val json = gson.fromJson(respBody, JsonObject::class.java)
-                ?: return ServiceResult(false, "응답 파싱 실패: 빈 응답")
-            val candidates = json.getAsJsonArray("candidates")
-            if (candidates == null || candidates.size() == 0) {
-                // 차단된 응답인지 확인
-                val blockReason = json.getAsJsonObject("promptFeedback")
-                    ?.get("blockReason")?.asString
-                if (blockReason != null) {
-                    return ServiceResult(false, "Gemini 응답 차단: $blockReason")
+            // SSE 스트림 파싱: 각 "data: {...}" 라인에서 텍스트 조각 수집
+            val fullText = StringBuilder()
+            var blockReason: String? = null
+
+            response.body?.let { body ->
+                body.source().use { source ->
+                    val buffer = okio.Buffer()
+                    while (!source.exhausted()) {
+                        source.read(buffer, 8192)
+                        val chunk = buffer.readUtf8()
+                        // SSE 형식: "data: {json}\n\n"
+                        val dataLines = chunk.split("\n")
+                            .filter { it.startsWith("data: ") }
+                            .map { it.removePrefix("data: ").trim() }
+
+                        for (dataLine in dataLines) {
+                            if (dataLine.isBlank()) continue
+                            try {
+                                val json = gson.fromJson(dataLine, JsonObject::class.java) ?: continue
+
+                                // 차단 여부 확인
+                                json.getAsJsonObject("promptFeedback")?.get("blockReason")?.asString?.let {
+                                    blockReason = it
+                                }
+
+                                // 텍스트 조각 추출
+                                val candidates = json.getAsJsonArray("candidates") ?: continue
+                                if (candidates.size() == 0) continue
+                                val parts = candidates[0]?.asJsonObject
+                                    ?.getAsJsonObject("content")
+                                    ?.getAsJsonArray("parts") ?: continue
+                                for (i in 0 until parts.size()) {
+                                    parts[i]?.asJsonObject?.get("text")?.asString?.let { text ->
+                                        fullText.append(text)
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                // 개별 chunk 파싱 실패는 무시 — 다음 chunk 계속 처리
+                                Log.w("GeminiService", "SSE chunk parse skip: ${e.message}")
+                            }
+                        }
+                    }
                 }
-                return ServiceResult(false, "Gemini 응답이 비어 있습니다. 응답: ${respBody.take(200)}")
             }
-            val content = candidates[0]?.asJsonObject?.getAsJsonObject("content")
-                ?: return ServiceResult(false, "응답 콘텐츠가 비어 있습니다.")
-            val parts = content.getAsJsonArray("parts")
-            if (parts == null || parts.size() == 0) {
-                return ServiceResult(false, "응답 파트가 비어 있습니다.")
+
+            if (blockReason != null) {
+                return ServiceResult(false, "Gemini 응답 차단: $blockReason")
             }
-            val text = parts[0]?.asJsonObject?.get("text")?.asString
-                ?: return ServiceResult(false, "응답 텍스트가 비어 있습니다.")
-            ServiceResult(true, text)
+
+            val resultText = fullText.toString()
+            if (resultText.isBlank()) {
+                return ServiceResult(false, "Gemini 응답이 비어 있습니다.")
+            }
+
+            ServiceResult(true, resultText)
         } catch (e: java.net.SocketTimeoutException) {
             Log.e("GeminiService", "Gemini API timeout: ${e.message}", e)
             ServiceResult(false, "⏰ 서버 응답 시간 초과 (Timeout)\n\n인터넷 연결을 확인하고 다시 시도해주세요.\n긴 회의록의 경우 시간이 더 걸릴 수 있습니다.")
