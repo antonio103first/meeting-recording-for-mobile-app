@@ -419,10 +419,11 @@ fun MeetingListScreen(viewModel: MeetingListViewModel) {
 }
 
 /**
- * ★ v3.3: 전체화면 마크다운 렌더링 다이얼로그
+ * ★ v3.3.1: 전체화면 마크다운 렌더링 다이얼로그
+ * - 보기 모드: WebView 마크다운 렌더링 (기본)
+ * - 편집 모드: TextField 직접 수정 + 저장 버튼
+ * - 찾기/바꾸기 바
  * - 전체복사 버튼
- * - 찾기/바꾸기 바 (화자 이름 수정 등에 활용)
- * - 바꾸기 실행 시 onTextChanged 콜백으로 DB 반영
  */
 @Composable
 private fun MeetingFullScreenTextDialog(
@@ -432,9 +433,13 @@ private fun MeetingFullScreenTextDialog(
     onTextChanged: ((String) -> Unit)? = null
 ) {
     val context = LocalContext.current
-    // 편집 가능한 텍스트 상태
     var currentText by remember(text) { mutableStateOf(text) }
     val htmlContent = remember(currentText) { markdownToHtml(currentText) }
+
+    // 모드 상태: 보기 vs 편집
+    var isEditMode by remember { mutableStateOf(false) }
+    var editText by remember { mutableStateOf("") }
+    var hasUnsavedChanges by remember { mutableStateOf(false) }
 
     // 찾기/바꾸기 상태
     var showFindReplace by remember { mutableStateOf(false) }
@@ -443,55 +448,70 @@ private fun MeetingFullScreenTextDialog(
     var matchCount by remember { mutableStateOf(0) }
     var replaceResultMsg by remember { mutableStateOf("") }
 
-    // 매치 수 계산
     LaunchedEffect(findQuery, currentText) {
         matchCount = if (findQuery.isNotEmpty()) {
-            var count = 0
-            var startIndex = 0
-            while (true) {
-                val idx = currentText.indexOf(findQuery, startIndex)
-                if (idx < 0) break
-                count++
-                startIndex = idx + findQuery.length
-            }
+            var count = 0; var start = 0
+            while (true) { val idx = currentText.indexOf(findQuery, start); if (idx < 0) break; count++; start = idx + findQuery.length }
             count
         } else 0
         replaceResultMsg = ""
     }
 
     Dialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = {
+            if (hasUnsavedChanges) {
+                // 미저장 변경이 있으면 무시하고 닫기 (또는 경고 — 여기서는 그냥 닫기)
+            }
+            onDismiss()
+        },
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
         Surface(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(top = 32.dp),
+            modifier = Modifier.fillMaxSize().padding(top = 32.dp),
             color = MaterialTheme.colorScheme.background,
             shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
                 // ── 헤더 ──
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
                         title,
                         fontWeight = FontWeight.Bold,
-                        fontSize = 18.sp,
+                        fontSize = 16.sp,
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f)
                     )
-                    // 찾기/바꾸기 토글
-                    IconButton(onClick = { showFindReplace = !showFindReplace }) {
-                        Icon(Icons.Filled.FindReplace, "찾기/바꾸기",
-                            tint = if (showFindReplace) Accent else MaterialTheme.colorScheme.onSurfaceVariant)
+                    // 편집/보기 모드 전환
+                    IconButton(onClick = {
+                        if (!isEditMode) {
+                            // 편집 모드 진입
+                            editText = currentText
+                            isEditMode = true
+                            showFindReplace = false
+                            hasUnsavedChanges = false
+                        } else {
+                            // 편집 모드 종료 (저장하지 않고 보기 모드로)
+                            isEditMode = false
+                            hasUnsavedChanges = false
+                        }
+                    }) {
+                        Icon(
+                            if (isEditMode) Icons.Filled.Visibility else Icons.Filled.Edit,
+                            if (isEditMode) "보기 모드" else "편집 모드",
+                            tint = if (isEditMode) Accent else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    // 찾기/바꾸기 (보기 모드에서만)
+                    if (!isEditMode) {
+                        IconButton(onClick = { showFindReplace = !showFindReplace }) {
+                            Icon(Icons.Filled.FindReplace, "찾기/바꾸기",
+                                tint = if (showFindReplace) Accent else MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                     }
                     // 전체복사
                     IconButton(onClick = {
@@ -507,14 +527,52 @@ private fun MeetingFullScreenTextDialog(
                 }
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
 
-                // ── 찾기/바꾸기 바 ──
-                if (showFindReplace) {
+                // ── 편집 모드: 저장 바 ──
+                if (isEditMode) {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = Accent.copy(alpha = 0.08f)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                if (hasUnsavedChanges) "수정됨 — 저장하세요" else "편집 모드",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = if (hasUnsavedChanges) Danger else Accent
+                            )
+                            Button(
+                                onClick = {
+                                    currentText = editText
+                                    onTextChanged?.invoke(currentText)
+                                    hasUnsavedChanges = false
+                                    isEditMode = false
+                                    Toast.makeText(context, "저장 완료", Toast.LENGTH_SHORT).show()
+                                },
+                                enabled = hasUnsavedChanges,
+                                colors = ButtonDefaults.buttonColors(containerColor = Accent),
+                                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 0.dp),
+                                modifier = Modifier.height(36.dp)
+                            ) {
+                                Icon(Icons.Filled.Save, null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("저장", fontSize = 13.sp)
+                            }
+                        }
+                    }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                }
+
+                // ── 찾기/바꾸기 바 (보기 모드에서만) ──
+                if (showFindReplace && !isEditMode) {
                     Surface(
                         modifier = Modifier.fillMaxWidth(),
                         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
                     ) {
                         Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-                            // 찾기 행
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically,
@@ -536,7 +594,6 @@ private fun MeetingFullScreenTextDialog(
                                 )
                             }
                             Spacer(Modifier.height(4.dp))
-                            // 바꾸기 행
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically,
@@ -557,8 +614,7 @@ private fun MeetingFullScreenTextDialog(
                                             currentText = currentText.replace(findQuery, replaceQuery)
                                             onTextChanged?.invoke(currentText)
                                             replaceResultMsg = "${replaced}건 변경 완료"
-                                            findQuery = ""
-                                            replaceQuery = ""
+                                            findQuery = ""; replaceQuery = ""
                                         }
                                     },
                                     enabled = findQuery.isNotEmpty() && matchCount > 0,
@@ -569,50 +625,65 @@ private fun MeetingFullScreenTextDialog(
                                     Text("전체 바꾸기", fontSize = 12.sp)
                                 }
                             }
-                            // 결과 메시지
                             if (replaceResultMsg.isNotEmpty()) {
-                                Text(
-                                    replaceResultMsg,
-                                    fontSize = 11.sp,
-                                    color = Success,
-                                    modifier = Modifier.padding(top = 4.dp)
-                                )
+                                Text(replaceResultMsg, fontSize = 11.sp, color = Success,
+                                    modifier = Modifier.padding(top = 4.dp))
                             }
                         }
                     }
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
                 }
 
-                // 안내 문구
-                Text(
-                    "길게 눌러 선택 복사 | 🔍 찾기/바꾸기로 화자 이름 수정",
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-
-                // WebView — 마크다운을 HTML로 렌더링
-                AndroidView(
-                    factory = { ctx ->
-                        WebView(ctx).apply {
-                            settings.apply {
-                                javaScriptEnabled = false
-                                defaultTextEncodingName = "UTF-8"
-                                loadWithOverviewMode = true
-                                useWideViewPort = true
+                // ── 본문 영역 ──
+                if (isEditMode) {
+                    // 편집 모드: TextField
+                    OutlinedTextField(
+                        value = editText,
+                        onValueChange = {
+                            editText = it
+                            hasUnsavedChanges = true
+                        },
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                        textStyle = LocalTextStyle.current.copy(
+                            fontSize = 14.sp,
+                            lineHeight = 22.sp,
+                            color = MaterialTheme.colorScheme.onSurface
+                        ),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Accent,
+                            unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+                        )
+                    )
+                } else {
+                    // 보기 모드: 안내 + WebView
+                    Text(
+                        "길게 눌러 선택 복사 | ✏️ 편집 버튼으로 내용 수정",
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    AndroidView(
+                        factory = { ctx ->
+                            WebView(ctx).apply {
+                                settings.apply {
+                                    javaScriptEnabled = false
+                                    defaultTextEncodingName = "UTF-8"
+                                    loadWithOverviewMode = true
+                                    useWideViewPort = true
+                                }
+                                isLongClickable = true
+                                setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                                loadDataWithBaseURL(null, htmlContent, "text/html", "UTF-8", null)
                             }
-                            isLongClickable = true
-                            setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                            loadDataWithBaseURL(null, htmlContent, "text/html", "UTF-8", null)
-                        }
-                    },
-                    update = { webView ->
-                        webView.loadDataWithBaseURL(null, htmlContent, "text/html", "UTF-8", null)
-                    },
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(horizontal = 4.dp)
-                )
+                        },
+                        update = { webView ->
+                            webView.loadDataWithBaseURL(null, htmlContent, "text/html", "UTF-8", null)
+                        },
+                        modifier = Modifier.fillMaxSize().padding(horizontal = 4.dp)
+                    )
+                }
             }
         }
     }
