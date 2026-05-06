@@ -1333,7 +1333,9 @@ private fun SummaryModeBottomSheet(
                 Triple("flow", "네트워킹(티타임)",
                     "비공식 미팅·티타임 — 주제별 압축 요약\n현황/주요내용 소항목, Q&A 주석"),
                 Triple("lecture_md", "강의 요약",
-                    "강의/세미나 — 상세 구조화 마크다운 노트\n이모지 금지, 핵심개념 정리 테이블")
+                    "강의/세미나 — 상세 구조화 마크다운 노트\n이모지 금지, 핵심개념 정리 테이블"),
+                Triple("conference", "컨퍼런스 / 간담회",
+                    "다수 발표자 행사·세미나·라운드테이블\n발표자별 핵심 메시지·인용·Q&A (Q/A 붙여 쓰기)")
             )
 
             modes.forEach { (value, label, description) ->

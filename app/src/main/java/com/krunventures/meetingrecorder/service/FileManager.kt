@@ -16,6 +16,7 @@ class FileManager {
         "phone" -> "전화메모"
         "flow" -> "네트워킹"
         "lecture_md" -> "강의요약"
+        "conference" -> "컨퍼런스"
         else -> "주간회의"
     }
 

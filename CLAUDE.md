@@ -1,4 +1,11 @@
-# CLAUDE.md — 회의녹음요약 모바일 앱 v3.0
+# CLAUDE.md — 회의녹음요약 모바일 앱 v3.0.6
+
+> PC 데스크톱 v3.0.6과 동기화 (2026-05-06)
+> - **전 양식 Q&A 규칙 통일** (SPEAKER/TOPIC/FORMAL_MD/PHONE/FLOW/LECTURE_MD/IR/CONFERENCE 8종 모두):
+>   STT 원문 금지 → 핵심 한·두 문장 요약, Q와 A는 붙여 쓰고 A↔Q 사이에만 빈 줄 1줄
+> - 양식 8 **컨퍼런스/간담회** (`SUMMARY_CONFERENCE` + dispatcher + 라디오, v3.0.5 도입)
+> - FileManager `conference → 컨퍼런스` 라벨, 파일명 포맷 `{회사}_{YYYYMMDD}({모드})` 유지
+
 
 ## 프로젝트 개요
 Android 모바일 회의 녹음 → STT 변환 → AI 회의록 요약 앱 (Kotlin + Jetpack Compose + Material3)
