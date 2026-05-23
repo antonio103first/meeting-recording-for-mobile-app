@@ -68,14 +68,14 @@ class FileManager {
 
     /**
      * ★ v3.2: 기본 저장 파일명 생성
-     * 형식: 제목_20260424(강의요약)
-     * 제목이 없으면: 회의록_20260424(강의요약)
+     * 형식: 제목_20260424_강의요약
+     * 제목이 없으면: 회의록_20260424_강의요약
      */
     fun buildSuggestedFileName(summaryText: String, summaryMode: String): String {
         val date = SimpleDateFormat("yyyyMMdd", Locale.getDefault()).format(Date())
         val modeLabel = getModeLabel(summaryMode)
         val title = extractTitleFromSummary(summaryText).ifBlank { "회의록" }
-        return "${title}_${date}(${modeLabel})"
+        return "${title}_${date}_${modeLabel}"
     }
 
     fun saveSttText(text: String, saveDir: File, fileName: String): Result<File> {
@@ -211,7 +211,7 @@ class FileManager {
      * 예: 20260322_투자심사_흐름중심.md
      */
     /**
-     * ★ v3.2: 재요약용 파일이름 — 동일한 제목_날짜(모드) 형식
+     * ★ v3.2: 재요약용 파일이름 — 동일한 제목_날짜_모드 형식
      */
     fun getResummarizeFileName(originalFileName: String, summaryMode: String): String {
         val date = SimpleDateFormat("yyyyMMdd", Locale.getDefault()).format(Date())
@@ -222,9 +222,10 @@ class FileManager {
             .removeSuffix(".stt")
             // 기존 날짜/모드 패턴 제거 (재요약 시 중복 방지)
             .replace(Regex("_\\d{8}\\(.*\\)$"), "")
+            .replace(Regex("_\\d{8}_[^_]+$"), "")
             .replace(Regex("_회의록$"), "")
             .take(40)
-        return "${baseName}_${date}(${modeLabel})"
+        return "${baseName}_${date}_${modeLabel}"
     }
 
     fun getFileSizeMb(file: File): Double =
