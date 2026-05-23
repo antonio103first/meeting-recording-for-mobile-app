@@ -75,6 +75,24 @@ class GoogleDriveService(private val context: Context) {
         }
     }
 
+    /**
+     * ★ v3.0.7: Drive 미연결 사유 진단 — UI에 노출하기 위함
+     * @return null이면 정상 연결 가능, 아니면 사유 문자열
+     */
+    fun diagnoseConnection(): String? {
+        val account = GoogleSignIn.getLastSignedInAccount(context)
+            ?: return "Google 로그인 필요"
+        if (!GoogleSignIn.hasPermissions(account, Scope(DriveScopes.DRIVE_FILE))) {
+            return "Drive 권한 미승인 — 재로그인 필요"
+        }
+        return try {
+            initDriveService(account)
+            null
+        } catch (e: Exception) {
+            "Drive 서비스 초기화 실패: ${e.message?.take(80)}"
+        }
+    }
+
     suspend fun signOut() {
         withContext(Dispatchers.IO) {
             getSignInClient().signOut()

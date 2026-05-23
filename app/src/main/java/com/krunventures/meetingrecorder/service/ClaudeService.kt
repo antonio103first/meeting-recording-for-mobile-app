@@ -76,6 +76,7 @@ class ClaudeService {
             "flow" -> GeminiService.SUMMARY_FLOW
             "lecture_md" -> GeminiService.SUMMARY_LECTURE_MD
             "conference" -> GeminiService.SUMMARY_CONFERENCE
+            "voice_memo" -> GeminiService.SUMMARY_VOICE_MEMO
             else -> GeminiService.SUMMARY_SPEAKER
         }
 

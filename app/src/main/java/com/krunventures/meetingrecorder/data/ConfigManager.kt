@@ -343,6 +343,64 @@ class ConfigManager(private val context: Context) {
     }
 
     /**
+     * SAF 트리 내 서브폴더에 텍스트 파일 저장.
+     * 폴더가 없으면 자동 생성. 음성메모 → 00_Inbox/voice_memos/ 저장에 사용.
+     *
+     * @param text 저장할 텍스트 내용
+     * @param safUriString Obsidian vault SAF tree URI
+     * @param subPath 서브폴더 경로 (예: "00_Inbox/voice_memos")
+     * @param fileName 파일명 (예: "음성메모_20260523_150000.md")
+     * @return 성공 시 SAF URI 문자열, 실패 시 null
+     */
+    fun writeTextToSafSubDir(
+        text: String,
+        safUriString: String,
+        subPath: String,
+        fileName: String
+    ): String? {
+        if (safUriString.isBlank()) return null
+        return try {
+            val treeUri = Uri.parse(safUriString)
+            var currentDoc = DocumentFile.fromTreeUri(context, treeUri) ?: return null
+
+            // 서브폴더 순서대로 탐색 / 없으면 생성
+            for (segment in subPath.split("/").filter { it.isNotBlank() }) {
+                currentDoc = currentDoc.findFile(segment)
+                    ?: currentDoc.createDirectory(segment)
+                    ?: run {
+                        Log.e(TAG, "SAF subDir 생성 실패: $segment")
+                        return null
+                    }
+            }
+
+            // 동일 이름 파일 삭제 (덮어쓰기)
+            currentDoc.findFile(fileName)?.delete()
+            currentDoc.findFile(fileName.substringBeforeLast("."))?.delete()
+
+            val newDoc = currentDoc.createFile("application/octet-stream", fileName) ?: run {
+                Log.e(TAG, "SAF subDir createFile 실패: $fileName")
+                return null
+            }
+
+            context.contentResolver.openOutputStream(newDoc.uri)?.use { out ->
+                out.write(text.toByteArray(Charsets.UTF_8))
+            } ?: run {
+                Log.e(TAG, "SAF subDir openOutputStream 실패: ${newDoc.uri}")
+                return null
+            }
+
+            Log.d(TAG, "✅ SAF 서브폴더 저장 성공: $subPath/$fileName → ${newDoc.uri}")
+            newDoc.uri.toString()
+        } catch (e: SecurityException) {
+            Log.e(TAG, "❌ SAF 권한 만료 (writeTextSubDir): $fileName → $safUriString", e)
+            null
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ SAF 서브폴더 저장 실패: $fileName → $safUriString", e)
+            null
+        }
+    }
+
+    /**
      * SAF URI에서 표시용 경로 추출 (UI 표시용)
      */
     fun safUriToDisplayPath(uriString: String): String {

@@ -22,6 +22,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+
+enum class RecordingMode { MEETING, VOICE_MEMO }
 
 data class RecordingUiState(
     val recordingState: RecordingState = RecordingState.IDLE,
@@ -51,7 +55,8 @@ data class RecordingUiState(
     val showResummarizeSheet: Boolean = false,  // show/hide summary mode BottomSheet
     val resummarizeProgress: Int = 0,  // progress for resummarize
     val resummarizeStatus: String = "",  // status for resummarize
-    val safNotConfigured: Boolean = false  // SAF 저장 폴더 미설정 경고
+    val safNotConfigured: Boolean = false,  // SAF 저장 폴더 미설정 경고
+    val recordingMode: RecordingMode = RecordingMode.MEETING
 )
 
 class RecordingViewModel(app: Application) : AndroidViewModel(app) {
@@ -562,6 +567,23 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
 
+        // ── 음성메모 모드: 별도 파이프라인으로 분기 ──────────────────
+        if (_uiState.value.recordingMode == RecordingMode.VOICE_MEMO) {
+            val claudeKey = config.claudeApiKey
+            val geminiKey = config.geminiApiKey
+            if (claudeKey.isBlank() && geminiKey.isBlank()) {
+                _uiState.value = _uiState.value.copy(
+                    error = "Claude 또는 Gemini API 키가 필요합니다.\n설정 탭에서 API 키를 입력해주세요."
+                )
+                return
+            }
+            _uiState.value = _uiState.value.copy(isProcessing = true, error = null)
+            viewModelScope.launch(Dispatchers.IO + exceptionHandler) {
+                runVoiceMemo(audioFile)
+            }
+            return
+        }
+
         _uiState.value = _uiState.value.copy(isProcessing = true, error = null)
         Log.d(TAG, "Pipeline starting — file: ${audioFile.absolutePath}, size: ${audioFile.length()}")
 
@@ -836,6 +858,9 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                     Log.d(TAG, "SAF direct save results: ${safResults.joinToString()}")
                 }
 
+                // ★ v3.0.7: Obsidian 미설정 경고 (Obsidian 폴더가 비어있는 경우)
+                val noObsidianW = if (obsidianUri.isBlank()) "\n⚠️ Obsidian 미연결 — 설정에서 vault 폴더를 지정하세요" else ""
+
                 // Step 7: Google Drive 자동 업로드 (STT + 회의록 파일 — 녹음파일은 stopRecording에서 이미 업로드)
                 if (config.driveAutoUpload) {
                     try {
@@ -860,27 +885,29 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                                 val safStatus = if (safResults.isNotEmpty()) " | 지정폴더: ${safResults.joinToString(" ")}" else ""
                                 val noSafW = if (safResults.isEmpty() && !hasSafConfigured()) "\n⚠️ 저장 폴더 미지정 — 설정에서 폴더를 지정하세요" else ""
                                 updateUiState { it.copy(
-                                    saveStatus = "✅ 저장 완료 + Drive ($uploadStatus)$safStatus$noSafW",
+                                    saveStatus = "✅ 저장 완료 + Drive ($uploadStatus)$safStatus$noSafW$noObsidianW",
                                     isProcessing = false
                                 ) }
                             } else {
                                 val noSafW = if (!hasSafConfigured()) "\n⚠️ 저장 폴더 미지정 — 설정에서 폴더를 지정하세요" else ""
                                 updateUiState { it.copy(
-                                    saveStatus = "✅ 저장 완료 (Drive 폴더 미설정)$noSafW",
+                                    saveStatus = "✅ 저장 완료 (Drive 폴더 미설정)$noSafW$noObsidianW",
                                     isProcessing = false
                                 ) }
                             }
                         } else {
+                            // ★ v3.0.7: Drive 미연결 사유 노출
+                            val driveReason = driveService.diagnoseConnection() ?: "원인 미상"
                             val noSafW = if (!hasSafConfigured()) "\n⚠️ 저장 폴더 미지정 — 설정에서 폴더를 지정하세요" else ""
                             updateUiState { it.copy(
-                                saveStatus = "✅ 저장 완료 (Drive 미연결)$noSafW",
+                                saveStatus = "✅ 저장 완료 (Drive 미연결: $driveReason)$noSafW$noObsidianW",
                                 isProcessing = false
                             ) }
                         }
                     } catch (e: Exception) {
                         Log.e(TAG, "Drive upload failed", e)
                         updateUiState { it.copy(
-                            saveStatus = "✅ 저장 완료 (Drive 업로드 실패: ${e.message?.take(100)})",
+                            saveStatus = "✅ 저장 완료 (Drive 업로드 실패: ${e.message?.take(100)})$noObsidianW",
                             isProcessing = false
                         ) }
                     }
@@ -888,7 +915,7 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                     val safStatus = if (safResults.isNotEmpty()) " | 지정폴더: ${safResults.joinToString(" ")}" else ""
                     val noSafWarning = if (safResults.isEmpty() && !hasSafConfigured()) "\n⚠️ 저장 폴더 미지정 — 앱 전용 폴더에만 저장됨\n(설정 → 💾저장/Drive에서 폴더를 지정하세요)" else ""
                     updateUiState { it.copy(
-                        saveStatus = "✅ 저장 완료$safStatus$noSafWarning",
+                        saveStatus = "✅ 저장 완료$safStatus$noSafWarning$noObsidianW",
                         isProcessing = false
                     ) }
                 }
@@ -1266,6 +1293,29 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                 // 알림
                 NotificationHelper.notifySummaryComplete(getApplication(), _uiState.value.selectedSttFile)
 
+                // ★ v3.0.7: 재요약 완료 즉시 앱 전용 디렉토리 + SAF + Obsidian에 임시 저장 (데이터 유실 방지)
+                // 사용자가 파일명 다이얼로그에서 취소해도 결과가 보존됨
+                val tempSummaryFileName = "재요약_${java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault()).format(java.util.Date())}"
+                try {
+                    val summaryDir = config.summarySaveDir
+                    val tempSummaryFile = fileManager.saveSummaryText(summaryText, summaryDir, tempSummaryFileName)
+                    Log.d(TAG, "Resummarize immediate save: ${tempSummaryFile.getOrNull()?.absolutePath}")
+                    // SAF에도 즉시 저장
+                    val summarySafUriImmediate = config.getSafUriForSummary()
+                    if (summarySafUriImmediate.isNotBlank()) {
+                        config.writeTextToSafDir(summaryText, summarySafUriImmediate, "${tempSummaryFileName}.txt")
+                        Log.d(TAG, "Resummarize immediate SAF save done")
+                    }
+                    // Obsidian에도 즉시 저장
+                    val obsidianUriImmediate = config.obsidianVaultDir
+                    if (obsidianUriImmediate.isNotBlank()) {
+                        config.writeTextToSafDir(summaryText, obsidianUriImmediate, "${tempSummaryFileName}.md")
+                        Log.d(TAG, "Resummarize immediate Obsidian save done")
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Resummarize immediate save failed (non-critical)", e)
+                }
+
                 // 파일이름 생성 (날짜_원본파일명_요약방식.md)
                 val originalName = loadedSttFile?.name ?: "회의록"
                 val suggestedName = fileManager.getResummarizeFileName(originalName, summaryMode)
@@ -1303,6 +1353,10 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
             resummarizeStatus = ""
         )
         loadedSttFile = null
+    }
+
+    fun setRecordingMode(mode: RecordingMode) {
+        _uiState.value = _uiState.value.copy(recordingMode = mode)
     }
 
     fun clearError() {
@@ -1351,6 +1405,85 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
         } catch (e: Exception) {
             Log.e(TAG, "Failed to apply speaker map", e)
             text  // Return original text if parsing fails
+        }
+    }
+
+    /**
+     * 음성메모 파이프라인: STT → Claude/Gemini 액션아이템 추출 → Obsidian 00_Inbox/voice_memos/ 자동 저장
+     * 파일명 다이얼로그 없음 — 음성메모_YYYYMMDD_HHmmss.md 로 자동 저장
+     */
+    private suspend fun runVoiceMemo(audioFile: File) {
+        try {
+            // Step 1: STT
+            updateUiState { it.copy(sttStatus = "STT 변환 중...") }
+            val sttResult = runStt(audioFile)
+            if (!sttResult.first) {
+                updateUiState { it.copy(isProcessing = false, error = "STT 실패:\n${sttResult.second}") }
+                return
+            }
+            val sttText = sttResult.second
+            updateUiState { it.copy(sttText = sttText, sttStatus = "STT 완료") }
+
+            // Step 2: 액션아이템 추출 (voice_memo 모드)
+            updateUiState { it.copy(summaryStatus = "액션아이템 추출 중...") }
+            val aiEngine = config.aiEngine
+            val safeOnProgress: (Int) -> Unit = { p ->
+                viewModelScope.launch(Dispatchers.Main) {
+                    _uiState.value = _uiState.value.copy(summaryProgress = p)
+                }
+            }
+            val sumResult = when {
+                aiEngine == "claude" && config.claudeApiKey.isNotBlank() ->
+                    claudeService.summarize(sttText, config.claudeApiKey, "voice_memo", onProgress = safeOnProgress)
+                        .let { Pair(it.success, it.text) }
+                config.geminiApiKey.isNotBlank() ->
+                    geminiService.summarize(sttText, config.geminiApiKey, "voice_memo", onProgress = safeOnProgress)
+                        .let { Pair(it.success, it.text) }
+                else ->
+                    claudeService.summarize(sttText, config.claudeApiKey, "voice_memo", onProgress = safeOnProgress)
+                        .let { Pair(it.success, it.text) }
+            }
+            if (!sumResult.first) {
+                updateUiState { it.copy(isProcessing = false, error = "액션아이템 추출 실패:\n${sumResult.second}") }
+                return
+            }
+            val summaryText = sumResult.second
+            updateUiState { it.copy(summaryText = summaryText, summaryStatus = "추출 완료") }
+
+            // Step 3: Obsidian 00_Inbox/voice_memos/ 저장
+            val ts = SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault()).format(Date())
+            val fileName = "음성메모_${ts}.md"
+            val created = SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.KOREAN).format(Date())
+            val mdContent = buildString {
+                appendLine("---")
+                appendLine("created: $created")
+                appendLine("type: voice_memo")
+                appendLine("---")
+                appendLine()
+                appendLine("## 요약")
+                appendLine(summaryText.trim())
+                appendLine()
+                appendLine("## STT 원문")
+                append(sttText.trim())
+            }
+
+            val obsidianUri = config.obsidianVaultDir
+            val saved = if (obsidianUri.isNotBlank()) {
+                config.writeTextToSafSubDir(mdContent, obsidianUri, "00_Inbox/voice_memos", fileName)
+            } else null
+
+            val status = if (saved != null) {
+                "✅ 음성메모 저장 완료\n📁 00_Inbox/voice_memos/$fileName"
+            } else {
+                "⚠️ 저장 실패 — 설정에서 Obsidian vault 폴더를 지정해주세요."
+            }
+            updateUiState { it.copy(isProcessing = false, saveStatus = status) }
+            NotificationHelper.notifySummaryComplete(getApplication(), fileName)
+            Log.d(TAG, "VoiceMemo saved: $fileName (obsidianSaved=${saved != null})")
+
+        } catch (e: Throwable) {
+            Log.e(TAG, "VoiceMemo pipeline error", e)
+            updateUiState { it.copy(isProcessing = false, error = "음성메모 처리 오류:\n${e.message?.take(300)}") }
         }
     }
 

@@ -43,6 +43,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.krunventures.meetingrecorder.service.CallState
 import com.krunventures.meetingrecorder.service.RecordingState
 import com.krunventures.meetingrecorder.ui.theme.*
+import com.krunventures.meetingrecorder.viewmodel.RecordingMode
 import com.krunventures.meetingrecorder.viewmodel.RecordingViewModel
 import kotlin.math.sin
 
@@ -175,6 +176,43 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
                 }
             }
 
+            // === 모드 토글: 회의 녹음 / 음성 메모 ===
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                val isMeeting = state.recordingMode == RecordingMode.MEETING
+                val isIdle = state.recordingState == RecordingState.IDLE && !state.isProcessing
+                Button(
+                    onClick = { if (isIdle) viewModel.setRecordingMode(RecordingMode.MEETING) },
+                    modifier = Modifier.weight(1f).height(44.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (isMeeting) MaterialTheme.colorScheme.primary
+                                         else MaterialTheme.colorScheme.surfaceVariant,
+                        contentColor = if (isMeeting) MaterialTheme.colorScheme.onPrimary
+                                       else MaterialTheme.colorScheme.onSurfaceVariant
+                    ),
+                    shape = RoundedCornerShape(12.dp),
+                    enabled = isIdle
+                ) {
+                    Text("🎙 회의 녹음", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                }
+                Button(
+                    onClick = { if (isIdle) viewModel.setRecordingMode(RecordingMode.VOICE_MEMO) },
+                    modifier = Modifier.weight(1f).height(44.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (!isMeeting) MaterialTheme.colorScheme.primary
+                                         else MaterialTheme.colorScheme.surfaceVariant,
+                        contentColor = if (!isMeeting) MaterialTheme.colorScheme.onPrimary
+                                       else MaterialTheme.colorScheme.onSurfaceVariant
+                    ),
+                    shape = RoundedCornerShape(12.dp),
+                    enabled = isIdle
+                ) {
+                    Text("📝 음성 메모", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+
             // === Section 1: Recording ===
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -189,8 +227,11 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("🎙 녹음", fontWeight = FontWeight.Bold, fontSize = 18.sp,
-                            color = MaterialTheme.colorScheme.onSurface)
+                        Text(
+                            if (state.recordingMode == RecordingMode.VOICE_MEMO) "📝 음성 메모" else "🎙 녹음",
+                            fontWeight = FontWeight.Bold, fontSize = 18.sp,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
                         if (state.recordingState == RecordingState.RECORDING) {
                             Spacer(Modifier.width(8.dp))
                             Box(
@@ -442,7 +483,13 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
                         } else {
                             Icon(Icons.Filled.PlayArrow, null, modifier = Modifier.size(22.dp))
                             Spacer(Modifier.width(6.dp))
-                            Text("▶ STT 변환 시작", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                            Text(
+                                if (state.recordingMode == RecordingMode.VOICE_MEMO)
+                                    "📝 음성 메모 저장"
+                                else
+                                    "▶ STT 변환 시작",
+                                fontSize = 16.sp, fontWeight = FontWeight.Bold
+                            )
                         }
                     }
 

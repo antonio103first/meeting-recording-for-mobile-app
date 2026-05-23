@@ -922,6 +922,20 @@ class GeminiService {
 
 ---
 회의녹음요약 앱 자동 생성"""
+
+        val SUMMARY_VOICE_MEMO = """다음 음성 메모를 분석하여 추후 해야 할 Action Item만 추출해줘.
+
+규칙:
+- 불릿 리스트 형식 (각 항목 앞에 "- " 사용)
+- 각 항목은 1줄 이내, 간결하고 실행 가능한 동작만
+- 최대 7개 항목
+- 사람 이름이 언급된 경우 "~에게 연락", "~에게 요청" 등 명확하게 표현
+- 정보성 내용(사실 나열, 배경 설명)은 제외
+- 항목 외 설명·머리말·마무리 문장 없이 리스트만 출력
+
+[음성 메모]
+{text}
+"""
     }
 
     // ── REST API 직접 호출 ──────────────────────────────────────
@@ -1236,6 +1250,7 @@ ${summaryText.take(100000)}
         "flow" -> SUMMARY_FLOW
         "lecture_md" -> SUMMARY_LECTURE_MD
         "conference" -> SUMMARY_CONFERENCE
+        "voice_memo" -> SUMMARY_VOICE_MEMO
         else -> SUMMARY_SPEAKER
     }
 
