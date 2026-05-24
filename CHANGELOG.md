@@ -4,6 +4,27 @@
 
 ---
 
+## [v3.4] — 2026-05-24
+
+### 추가 (Added)
+- 녹음 정지 즉시 회의목록 자동 등록 — MEETING/VOICE_MEMO 공통 (가져오기 불필요)
+- `pendingMeetingId` 필드 신설 — 회의녹음 preliminary DB insert ID 추적
+- 설정 화면 "🔍 로컬 파일 스캔 (기존 파일 DB 등록)" 버튼
+- 음성메모 파이프라인 (`RecordingMode.VOICE_MEMO`): 파일명 다이얼로그 없이 자동 저장
+  - 녹음: `메모녹음_YYYYMMDD_HHmmss.m4a`
+  - STT: `메모녹음_YYYYMMDD.txt`, 요약: `메모녹음_YYYYMMDD.md`
+  - 2~3문장 간단 요약 (`SUMMARY_VOICE_MEMO` 템플릿 — GeminiService/ClaudeService)
+  - Obsidian `00_Inbox/voice_memos/` 자동 저장
+
+### 변경 (Changed)
+- `confirmFileName()`: update-or-insert 패턴 — preliminary insert 레코드가 있으면 `dao.update*()`으로 갱신, 없으면 `dao.insert()`
+
+### 수정 (Fixed)
+- 녹음 후 파이프라인 미실행 시 회의목록 미표시 문제 해결 (두 모드 모두 즉시 등록)
+- 음성메모 DB 레코드가 STT 완료 후 중복 insert되는 버그 수정 (update로 변경)
+
+---
+
 ## [V1.5] — 2026-03-23
 
 ### 추가 (Added)

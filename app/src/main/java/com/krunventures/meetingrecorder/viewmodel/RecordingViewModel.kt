@@ -94,6 +94,10 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
     private var pendingAudioFile: File? = null
     // 즉시 저장된 녹음파일 (confirmFileName에서 rename 시 사용)
     private var savedRecordingFile: File? = null
+    // 음성메모 — 녹음 정지 즉시 DB에 삽입된 레코드 ID (STT 완료 후 update에 사용)
+    private var pendingVoiceMemoId: Long = -1L
+    // 회의녹음 — 녹음 정지 즉시 DB에 삽입된 레코드 ID (confirmFileName 후 update에 사용)
+    private var pendingMeetingId: Long = -1L
     // V2.0: 재요약 기능 — 로드된 STT 파일
     private var loadedSttFile: File? = null
 
@@ -346,10 +350,11 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
      * 파이프라인(STT→요약)과 독립적으로 실행 — 앱 크래시/종료에도 녹음파일 보존
      */
     private fun saveRecordingImmediately(audioFile: File) {
+        val prefix = if (_uiState.value.recordingMode == RecordingMode.VOICE_MEMO) "메모녹음" else "REC"
         viewModelScope.launch(Dispatchers.IO + exceptionHandler) {
             try {
                 // 1) 로컬 즉시 저장
-                val saveResult = fileManager.saveRecordingImmediately(audioFile, config.audioSaveDir)
+                val saveResult = fileManager.saveRecordingImmediately(audioFile, config.audioSaveDir, prefix)
                 val savedFile = saveResult.getOrNull()
                 if (savedFile != null) {
                     savedRecordingFile = savedFile
@@ -357,6 +362,29 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                     updateUiState { it.copy(
                         saveStatus = "✅ 녹음파일 저장됨: ${savedFile.name}"
                     ) }
+
+                    // 녹음 정지 즉시 DB insert → 회의 목록에 바로 표시 (두 모드 공통)
+                    val currentMode = _uiState.value.recordingMode
+                    Log.d(TAG, "saveRecordingImmediately — mode=$currentMode, file=${savedFile.name}")
+                    try {
+                        val created = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(Date())
+                        val insertedId = dao.insert(Meeting(
+                            createdAt = created,
+                            fileName = savedFile.name,
+                            mp3LocalPath = savedFile.absolutePath,
+                            fileSizeMb = fileManager.getFileSizeMb(savedFile)
+                        ))
+                        if (currentMode == RecordingMode.VOICE_MEMO) {
+                            pendingVoiceMemoId = insertedId
+                        } else {
+                            pendingMeetingId = insertedId
+                        }
+                        Log.d(TAG, "DB insert OK: id=$insertedId, mode=$currentMode, file=${savedFile.name}")
+                        updateUiState { it.copy(saveStatus = "✅ 녹음파일 저장 + 목록 등록됨: ${savedFile.name}") }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "DB insert FAILED", e)
+                        updateUiState { it.copy(saveStatus = "⚠️ 녹음 저장됨: ${savedFile.name} (목록 등록 실패: ${e.message})") }
+                    }
 
                     // 알림 표시
                     NotificationHelper.notifyRecordingSaved(getApplication(), savedFile.name)
@@ -823,21 +851,40 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
 
-                // Step 6: Save to DB (최종 경로 반영 — STT와 요약 경로 분리)
+                // Step 6: Save to DB — preliminary insert된 레코드가 있으면 update, 없으면 insert
                 try {
-                    dao.insert(Meeting(
-                        createdAt = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date()),
-                        fileName = finalAudioFile?.name ?: fileName,  // null check for resummarize mode
-                        mp3LocalPath = finalAudioFile?.absolutePath ?: "",  // empty path for resummarize
-                        sttLocalPath = sttFile.getOrNull()?.absolutePath ?: "",
-                        summaryLocalPath = summaryFile.getOrNull()?.absolutePath ?: "",
-                        sttText = sttText,
-                        summaryText = summaryText,
-                        fileSizeMb = if (finalAudioFile != null) fileManager.getFileSizeMb(finalAudioFile) else 0.0
-                    ))
-                    Log.d(TAG, "Meeting saved to DB")
+                    val mId = pendingMeetingId
+                    if (mId > 0L) {
+                        // 녹음 정지 시 이미 insert된 레코드 → update
+                        val finalName = finalAudioFile?.name ?: fileName
+                        dao.updateFileName(mId.toInt(), finalName)
+                        dao.updateFilePaths(
+                            mId.toInt(),
+                            finalAudioFile?.absolutePath ?: "",
+                            sttFile.getOrNull()?.absolutePath ?: "",
+                            summaryFile.getOrNull()?.absolutePath ?: ""
+                        )
+                        dao.updateSummary(
+                            mId.toInt(), sttText, summaryText,
+                            summaryFile.getOrNull()?.absolutePath ?: ""
+                        )
+                        Log.d(TAG, "Meeting DB updated: id=$mId → $finalName")
+                    } else {
+                        // 재요약 등 preliminary insert 없는 경우 → 새로 insert
+                        dao.insert(Meeting(
+                            createdAt = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date()),
+                            fileName = finalAudioFile?.name ?: fileName,
+                            mp3LocalPath = finalAudioFile?.absolutePath ?: "",
+                            sttLocalPath = sttFile.getOrNull()?.absolutePath ?: "",
+                            summaryLocalPath = summaryFile.getOrNull()?.absolutePath ?: "",
+                            sttText = sttText,
+                            summaryText = summaryText,
+                            fileSizeMb = if (finalAudioFile != null) fileManager.getFileSizeMb(finalAudioFile) else 0.0
+                        ))
+                        Log.d(TAG, "Meeting saved to DB (new insert)")
+                    }
                 } catch (e: Exception) {
-                    Log.e(TAG, "DB insert failed", e)
+                    Log.e(TAG, "DB insert/update failed", e)
                 }
 
                 // Step 6.5: SAF 직접 저장 결과 집계 (Step 5에서 이미 SAF에 직접 저장 완료)
@@ -930,6 +977,7 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                 pendingSummaryText = null
                 pendingAudioFile = null
                 savedRecordingFile = null
+                pendingMeetingId = -1L
             }
         }
     }
@@ -946,6 +994,7 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
         pendingSttText = null
         pendingSummaryText = null
         pendingAudioFile = null
+        pendingMeetingId = -1L
         // savedRecordingFile은 유지 — 이미 저장된 녹음파일은 삭제하지 않음
     }
 
@@ -1409,8 +1458,11 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * 음성메모 파이프라인: STT → Claude/Gemini 액션아이템 추출 → Obsidian 00_Inbox/voice_memos/ 자동 저장
-     * 파일명 다이얼로그 없음 — 음성메모_YYYYMMDD_HHmmss.md 로 자동 저장
+     * 음성메모 파이프라인:
+     * 1) 녹음 정지 즉시 → 메모녹음_YYYYMMDD_HHmmss.mp3 (saveRecordingImmediately에서 처리)
+     * 2) STT → 메모녹음_YYYYMMDD.txt (sttSaveDir + SAF)
+     * 3) 요약(2~3문장) → 메모녹음_YYYYMMDD.md (summarySaveDir + SAF + Obsidian)
+     * 파일명 다이얼로그 없음 — 자동 저장
      */
     private suspend fun runVoiceMemo(audioFile: File) {
         try {
@@ -1424,8 +1476,8 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
             val sttText = sttResult.second
             updateUiState { it.copy(sttText = sttText, sttStatus = "STT 완료") }
 
-            // Step 2: 액션아이템 추출 (voice_memo 모드)
-            updateUiState { it.copy(summaryStatus = "액션아이템 추출 중...") }
+            // Step 2: 2~3문장 간단 요약 (voice_memo 모드)
+            updateUiState { it.copy(summaryStatus = "요약 중...") }
             val aiEngine = config.aiEngine
             val safeOnProgress: (Int) -> Unit = { p ->
                 viewModelScope.launch(Dispatchers.Main) {
@@ -1444,16 +1496,32 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                         .let { Pair(it.success, it.text) }
             }
             if (!sumResult.first) {
-                updateUiState { it.copy(isProcessing = false, error = "액션아이템 추출 실패:\n${sumResult.second}") }
+                updateUiState { it.copy(isProcessing = false, error = "요약 실패:\n${sumResult.second}") }
                 return
             }
             val summaryText = sumResult.second
-            updateUiState { it.copy(summaryText = summaryText, summaryStatus = "추출 완료") }
+            updateUiState { it.copy(summaryText = summaryText, summaryStatus = "요약 완료") }
 
-            // Step 3: Obsidian 00_Inbox/voice_memos/ 저장
-            val ts = SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault()).format(Date())
-            val fileName = "음성메모_${ts}.md"
+            // Step 3: 파일 저장
+            val dateStr = SimpleDateFormat("yyyyMMdd", java.util.Locale.getDefault()).format(Date())
+            val baseName = "메모녹음_$dateStr"
             val created = SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.KOREAN).format(Date())
+
+            // STT → 메모녹음_YYYYMMDD.txt
+            var sttSavedPath = ""
+            try {
+                val sttResult2 = fileManager.saveSttText(sttText, config.sttSaveDir, baseName)
+                sttSavedPath = sttResult2.getOrNull()?.absolutePath ?: ""
+                val sttSafUri = config.getSafUriForStt()
+                if (sttSafUri.isNotBlank()) {
+                    config.writeTextToSafDir(sttText, sttSafUri, "${baseName}.txt")
+                }
+                Log.d(TAG, "VoiceMemo STT saved: $sttSavedPath")
+            } catch (e: Exception) {
+                Log.e(TAG, "VoiceMemo STT save failed", e)
+            }
+
+            // 요약 → 메모녹음_YYYYMMDD.md (frontmatter + 요약 + STT 원문)
             val mdContent = buildString {
                 appendLine("---")
                 appendLine("created: $created")
@@ -1467,19 +1535,71 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                 append(sttText.trim())
             }
 
+            var summarySavedPath = ""
+            try {
+                val summaryDir = config.summarySaveDir
+                summaryDir.mkdirs()
+                val mdFile = File(summaryDir, "${baseName}.md")
+                mdFile.writeText(mdContent, Charsets.UTF_8)
+                summarySavedPath = mdFile.absolutePath
+                val summarySafUri = config.getSafUriForSummary()
+                if (summarySafUri.isNotBlank()) {
+                    config.writeTextToSafDir(mdContent, summarySafUri, "${baseName}.md")
+                }
+                Log.d(TAG, "VoiceMemo summary saved: $summarySavedPath")
+            } catch (e: Exception) {
+                Log.e(TAG, "VoiceMemo summary save failed", e)
+            }
+
+            // Obsidian vault → 00_Inbox/voice_memos/메모녹음_YYYYMMDD.md
             val obsidianUri = config.obsidianVaultDir
-            val saved = if (obsidianUri.isNotBlank()) {
-                config.writeTextToSafSubDir(mdContent, obsidianUri, "00_Inbox/voice_memos", fileName)
+            val obsidianSaved = if (obsidianUri.isNotBlank()) {
+                try {
+                    config.writeTextToSafSubDir(mdContent, obsidianUri, "00_Inbox/voice_memos", "${baseName}.md")
+                } catch (e: Exception) {
+                    Log.e(TAG, "VoiceMemo Obsidian save failed", e); null
+                }
             } else null
 
-            val status = if (saved != null) {
-                "✅ 음성메모 저장 완료\n📁 00_Inbox/voice_memos/$fileName"
-            } else {
-                "⚠️ 저장 실패 — 설정에서 Obsidian vault 폴더를 지정해주세요."
+            // DB 저장: 녹음 정지 시 이미 insert된 레코드를 update, 없으면 새로 insert
+            val audioSaved = savedRecordingFile
+            val mp3Path = audioSaved?.absolutePath ?: audioFile.absolutePath
+            try {
+                val memoId = pendingVoiceMemoId
+                if (memoId > 0L) {
+                    // 기존 레코드 update (STT + 요약 + 파일경로 + 파일명 갱신)
+                    dao.updateSummary(memoId.toInt(), sttText, summaryText, summarySavedPath)
+                    dao.updateFilePaths(memoId.toInt(), mp3Path, sttSavedPath, summarySavedPath)
+                    dao.updateFileName(memoId.toInt(), "${baseName}.md")
+                    Log.d(TAG, "VoiceMemo DB updated: id=$memoId → ${baseName}.md")
+                } else {
+                    // 예비 insert가 없었던 경우 (외부 파일 선택 등) — 새로 insert
+                    dao.insert(Meeting(
+                        createdAt = created,
+                        fileName = "${baseName}.md",
+                        mp3LocalPath = mp3Path,
+                        sttLocalPath = sttSavedPath,
+                        summaryLocalPath = summarySavedPath,
+                        sttText = sttText,
+                        summaryText = summaryText,
+                        fileSizeMb = (audioSaved ?: audioFile).length() / (1024.0 * 1024.0)
+                    ))
+                    Log.d(TAG, "VoiceMemo inserted into DB: ${baseName}.md")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "VoiceMemo DB save failed", e)
+            } finally {
+                pendingVoiceMemoId = -1L
+            }
+
+            val status = buildString {
+                append("✅ 음성메모 저장 완료")
+                append("\n📝 ${baseName}.txt / 📋 ${baseName}.md")
+                if (obsidianSaved != null) append("\n📓 Obsidian: 00_Inbox/voice_memos/")
             }
             updateUiState { it.copy(isProcessing = false, saveStatus = status) }
-            NotificationHelper.notifySummaryComplete(getApplication(), fileName)
-            Log.d(TAG, "VoiceMemo saved: $fileName (obsidianSaved=${saved != null})")
+            NotificationHelper.notifySummaryComplete(getApplication(), "${baseName}.md")
+            Log.d(TAG, "VoiceMemo complete: $baseName")
 
         } catch (e: Throwable) {
             Log.e(TAG, "VoiceMemo pipeline error", e)

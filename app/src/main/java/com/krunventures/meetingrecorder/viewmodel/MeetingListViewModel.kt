@@ -2,20 +2,28 @@ package com.krunventures.meetingrecorder.viewmodel
 
 import android.app.Application
 import android.content.Intent
+import android.net.Uri
 import android.util.Log
 import androidx.core.content.FileProvider
+import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.krunventures.meetingrecorder.MeetingApp
+import com.krunventures.meetingrecorder.data.ConfigManager
 import com.krunventures.meetingrecorder.data.Meeting
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.krunventures.meetingrecorder.util.MdToPdfConverter
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 data class MeetingListUiState(
     val showActionMenu: Boolean = false,
@@ -33,9 +41,11 @@ data class MeetingListUiState(
 class MeetingListViewModel(app: Application) : AndroidViewModel(app) {
     companion object {
         private const val TAG = "MeetingListVM"
+        private val AUDIO_EXTENSIONS = setOf("mp3", "m4a", "wav", "aac")
     }
 
     private val dao = (app as MeetingApp).database.meetingDao()
+    private val config = ConfigManager(app)
     val meetings = dao.getAll()
 
     private val _uiState = MutableStateFlow(MeetingListUiState())
@@ -443,6 +453,108 @@ class MeetingListViewModel(app: Application) : AndroidViewModel(app) {
         _uiState.value = _uiState.value.copy(statusMessage = "")
     }
 
+    // === DB Export / Import ===
+
+    fun exportMeetings(destUri: Uri) {
+        val context = getApplication<Application>()
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val allMeetings = meetings.first()
+                val jsonArray = JSONArray()
+                allMeetings.forEach { m ->
+                    jsonArray.put(JSONObject().apply {
+                        put("createdAt", m.createdAt)
+                        put("fileName", m.fileName)
+                        put("mp3LocalPath", m.mp3LocalPath)
+                        put("sttLocalPath", m.sttLocalPath)
+                        put("summaryLocalPath", m.summaryLocalPath)
+                        put("sttText", m.sttText)
+                        put("summaryText", m.summaryText)
+                        put("driveMp3Link", m.driveMp3Link)
+                        put("driveSttLink", m.driveSttLink)
+                        put("driveSummaryLink", m.driveSummaryLink)
+                        put("fileSizeMb", m.fileSizeMb)
+                        put("speakerMap", m.speakerMap ?: "")
+                    })
+                }
+                context.contentResolver.openOutputStream(destUri)?.use { out ->
+                    out.write(jsonArray.toString(2).toByteArray(Charsets.UTF_8))
+                } ?: throw Exception("파일을 쓸 수 없습니다")
+                withContext(Dispatchers.Main) {
+                    _uiState.value = _uiState.value.copy(statusMessage = "✅ ${allMeetings.size}건 내보내기 완료")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Export failed", e)
+                withContext(Dispatchers.Main) {
+                    _uiState.value = _uiState.value.copy(statusMessage = "내보내기 실패: ${e.message?.take(100)}")
+                }
+            }
+        }
+    }
+
+    fun importMeetings(uri: Uri) {
+        val context = getApplication<Application>()
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val jsonText = context.contentResolver.openInputStream(uri)
+                    ?.bufferedReader()?.readText()
+                    ?: run {
+                        withContext(Dispatchers.Main) {
+                            _uiState.value = _uiState.value.copy(statusMessage = "파일을 읽을 수 없습니다")
+                        }
+                        return@launch
+                    }
+                if (!jsonText.trimStart().startsWith("[")) {
+                    withContext(Dispatchers.Main) {
+                        _uiState.value = _uiState.value.copy(
+                            statusMessage = "잘못된 파일입니다. 📤 내보내기로 생성한 meeting_backup_*.json 파일을 선택하세요."
+                        )
+                    }
+                    return@launch
+                }
+                val jsonArray = JSONArray(jsonText)
+                var imported = 0
+                var skipped = 0
+                for (i in 0 until jsonArray.length()) {
+                    val obj = jsonArray.getJSONObject(i)
+                    val fileName = obj.optString("fileName", "")
+                    if (fileName.isBlank()) { skipped++; continue }
+                    if (dao.getByFileName(fileName) != null) { skipped++; continue }
+                    dao.insert(
+                        Meeting(
+                            id = 0,
+                            createdAt = obj.optString("createdAt", ""),
+                            fileName = fileName,
+                            mp3LocalPath = obj.optString("mp3LocalPath", ""),
+                            sttLocalPath = obj.optString("sttLocalPath", ""),
+                            summaryLocalPath = obj.optString("summaryLocalPath", ""),
+                            sttText = obj.optString("sttText", ""),
+                            summaryText = obj.optString("summaryText", ""),
+                            driveMp3Link = obj.optString("driveMp3Link", ""),
+                            driveSttLink = obj.optString("driveSttLink", ""),
+                            driveSummaryLink = obj.optString("driveSummaryLink", ""),
+                            fileSizeMb = obj.optDouble("fileSizeMb", 0.0),
+                            speakerMap = obj.optString("speakerMap", "").takeIf { it.isNotEmpty() }
+                        )
+                    )
+                    imported++
+                }
+                withContext(Dispatchers.Main) {
+                    _uiState.value = _uiState.value.copy(
+                        statusMessage = "✅ ${imported}건 복원 완료 (${skipped}건 건너뜀)"
+                    )
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Import failed: ${e.javaClass.simpleName}", e)
+                withContext(Dispatchers.Main) {
+                    _uiState.value = _uiState.value.copy(
+                        statusMessage = "가져오기 실패 [${e.javaClass.simpleName}]: ${e.message?.take(80)}"
+                    )
+                }
+            }
+        }
+    }
+
     // === Speaker Name Change ===
     fun extractSpeakers(sttText: String): List<String> {
         // Regex to find [화자1], [화자2], [Speaker 1] etc. patterns
@@ -551,6 +663,108 @@ class MeetingListViewModel(app: Application) : AndroidViewModel(app) {
                 Log.d(TAG, "STT text updated for meeting $meetingId")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to update STT text", e)
+            }
+        }
+    }
+
+    // === 로컬 파일 스캔 ===
+    fun scanLocalFiles() {
+        val context = getApplication<Application>()
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                var added = 0
+
+                // 헬퍼: 기본 이름으로 STT/요약 파일 찾기
+                fun findText(dir: java.io.File, base: String): java.io.File? =
+                    listOf("$base.txt", "$base.md").map { java.io.File(dir, it) }.firstOrNull { it.exists() }
+
+                fun readSafe(f: java.io.File?) = try { f?.readText(Charsets.UTF_8) ?: "" } catch (_: Exception) { "" }
+
+                // 앱 전용 오디오 디렉토리 스캔
+                config.audioSaveDir.takeIf { it.exists() }
+                    ?.listFiles()
+                    ?.filter { it.isFile && it.extension.lowercase() in AUDIO_EXTENSIONS }
+                    ?.forEach { audioFile ->
+                        if (dao.getByFileName(audioFile.name) == null) {
+                            val base = audioFile.nameWithoutExtension
+                            val sttFile = findText(config.sttSaveDir, base)
+                            val summaryFile = findText(config.summarySaveDir, base)
+                            dao.insert(Meeting(
+                                createdAt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+                                    .format(Date(audioFile.lastModified())),
+                                fileName = audioFile.name,
+                                mp3LocalPath = audioFile.absolutePath,
+                                sttLocalPath = sttFile?.absolutePath ?: "",
+                                summaryLocalPath = summaryFile?.absolutePath ?: "",
+                                sttText = readSafe(sttFile),
+                                summaryText = readSafe(summaryFile),
+                                fileSizeMb = audioFile.length() / (1024.0 * 1024.0)
+                            ))
+                            added++
+                        }
+                    }
+
+                // SAF 오디오 디렉토리 스캔
+                val audioSafUri = config.getSafUriForAudio()
+                if (audioSafUri.isNotBlank()) {
+                    DocumentFile.fromTreeUri(context, Uri.parse(audioSafUri))
+                        ?.listFiles()
+                        ?.filter { it.isFile && it.name?.substringAfterLast(".")?.lowercase() in AUDIO_EXTENSIONS }
+                        ?.forEach { docFile ->
+                            val name = docFile.name ?: return@forEach
+                            if (dao.getByFileName(name) == null) {
+                                val base = name.substringBeforeLast(".")
+                                val sttFile = findText(config.sttSaveDir, base)
+                                val summaryFile = findText(config.summarySaveDir, base)
+                                dao.insert(Meeting(
+                                    createdAt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+                                        .format(Date(docFile.lastModified())),
+                                    fileName = name,
+                                    mp3LocalPath = docFile.uri.toString(),
+                                    sttLocalPath = sttFile?.absolutePath ?: "",
+                                    summaryLocalPath = summaryFile?.absolutePath ?: "",
+                                    sttText = readSafe(sttFile),
+                                    summaryText = readSafe(summaryFile),
+                                    fileSizeMb = docFile.length() / (1024.0 * 1024.0)
+                                ))
+                                added++
+                            }
+                        }
+                }
+
+                // 오디오 없이 STT/요약 파일만 있는 경우도 등록
+                config.sttSaveDir.takeIf { it.exists() }
+                    ?.listFiles()
+                    ?.filter { it.isFile && it.extension.lowercase() == "txt" }
+                    ?.forEach { sttFile ->
+                        val base = sttFile.nameWithoutExtension
+                        if (dao.getByFileName(base) == null && dao.getByFileName("${base}.txt") == null) {
+                            val summaryFile = findText(config.summarySaveDir, base)
+                            dao.insert(Meeting(
+                                createdAt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+                                    .format(Date(sttFile.lastModified())),
+                                fileName = base,
+                                mp3LocalPath = "",
+                                sttLocalPath = sttFile.absolutePath,
+                                summaryLocalPath = summaryFile?.absolutePath ?: "",
+                                sttText = readSafe(sttFile),
+                                summaryText = readSafe(summaryFile),
+                                fileSizeMb = 0.0
+                            ))
+                            added++
+                        }
+                    }
+
+                withContext(Dispatchers.Main) {
+                    _uiState.value = _uiState.value.copy(
+                        statusMessage = if (added > 0) "✅ ${added}개 파일 추가됨" else "새로 추가할 파일이 없습니다"
+                    )
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Scan failed", e)
+                withContext(Dispatchers.Main) {
+                    _uiState.value = _uiState.value.copy(statusMessage = "스캔 실패: ${e.message?.take(100)}")
+                }
             }
         }
     }

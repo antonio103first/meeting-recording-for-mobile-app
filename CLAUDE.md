@@ -1,10 +1,10 @@
-# CLAUDE.md — 회의녹음요약 모바일 앱 v3.0.6
+# CLAUDE.md — 회의녹음요약 모바일 앱 v3.4
 
-> PC 데스크톱 v3.0.6과 동기화 (2026-05-06)
-> - **전 양식 Q&A 규칙 통일** (SPEAKER/TOPIC/FORMAL_MD/PHONE/FLOW/LECTURE_MD/IR/CONFERENCE 8종 모두):
->   STT 원문 금지 → 핵심 한·두 문장 요약, Q와 A는 붙여 쓰고 A↔Q 사이에만 빈 줄 1줄
-> - 양식 8 **컨퍼런스/간담회** (`SUMMARY_CONFERENCE` + dispatcher + 라디오, v3.0.5 도입)
-> - FileManager `conference → 컨퍼런스` 라벨, 파일명 포맷 `{회사}_{YYYYMMDD}({모드})` 유지
+> v3.4 (2026-05-24): 녹음 정지 즉시 회의목록 자동 등록 + 음성메모 파이프라인 완성
+>
+> **이전 버전:**
+> - PC 데스크톱 v3.0.8 동기화 (2026-05-12): 파일 저장명 포맷 `_YYYYMMDD_모드` (언더스코어)
+> - PC 데스크톱 v3.0.6 동기화 (2026-05-06): 전 양식 Q&A 규칙 통일, 컨퍼런스/간담회 양식
 
 
 ## 프로젝트 개요
@@ -46,6 +46,39 @@ app/src/main/java/com/krunventures/meetingrecorder/
 │   └── SettingsViewModel.kt      # 설정 상태 관리
 └── widget/
     └── RecordingWidget.kt        # 홈 화면 위젯
+```
+
+## v3.4 주요 변경사항 (2026-05-24)
+
+1. **녹음 정지 즉시 회의목록 자동 등록** — MEETING/VOICE_MEMO 모드 공통
+   - 녹음 정지 → `REC_YYYYMMDD_HHmmss.m4a` / `메모녹음_YYYYMMDD_HHmmss.m4a`로 즉시 DB insert
+   - `pendingMeetingId` / `pendingVoiceMemoId` 로 레코드 ID 추적
+   - 가져오기(스캔) 없이 녹음 후 바로 회의목록에 표시됨
+2. **confirmFileName() — update-or-insert 패턴**
+   - preliminary insert된 레코드가 있으면 update (파일명·경로·STT·요약 반영)
+   - 재요약 등 preliminary 없는 경우에만 새로 insert
+3. **음성메모 파이프라인** — 별도 파이프라인 (파일명 다이얼로그 없음, 자동 저장)
+   - STT → `메모녹음_YYYYMMDD.txt`, 요약 → `메모녹음_YYYYMMDD.md`
+   - 2~3문장 간단 요약 (`SUMMARY_VOICE_MEMO` 템플릿)
+   - Obsidian `00_Inbox/voice_memos/` 자동 저장
+4. **로컬 파일 스캔** — 설정 > 💾저장/Drive > DB백업 카드에 "🔍 로컬 파일 스캔" 버튼 추가
+
+### RecordingViewModel 핵심 플로우 (v3.4)
+
+```
+녹음 정지 (stopRecording)
+  └─ saveRecordingImmediately()
+       ├─ fileManager.saveRecordingImmediately(prefix="메모녹음"|"REC")  → m4a 저장
+       ├─ dao.insert(Meeting) → pendingVoiceMemoId 또는 pendingMeetingId 저장
+       └─ SAF 복사 + Drive 업로드
+
+파이프라인 실행 (startPipeline)
+  ├─ VOICE_MEMO → runVoiceMemo()
+  │     └─ STT → 간단 요약 → 파일 저장 → dao.updateSummary/FilePaths/FileName(pendingVoiceMemoId)
+  └─ MEETING → runStt() → runSummary() → 파일명 다이얼로그
+               └─ confirmFileName()
+                     └─ pendingMeetingId > 0: dao.update*(id) (update)
+                        else: dao.insert() (재요약 등)
 ```
 
 ## v3.0 주요 변경사항

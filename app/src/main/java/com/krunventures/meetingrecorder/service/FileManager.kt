@@ -157,10 +157,12 @@ class FileManager {
      * @param saveDir 최종 저장 디렉토리 (audioSaveDir)
      * @return 저장된 파일 (임시 이름)
      */
-    fun saveRecordingImmediately(srcFile: File, saveDir: File): Result<File> {
+    fun saveRecordingImmediately(srcFile: File, saveDir: File, prefix: String = "REC"): Result<File> {
         return try {
             saveDir.mkdirs()
-            val tempName = "REC_${getDefaultBaseName()}.${srcFile.extension.ifEmpty { "mp3" }}"
+            // MediaRecorder는 MPEG-4+AAC로 녹음하므로 m4a가 정확한 포맷
+            val ext = if (srcFile.extension.isNotEmpty()) srcFile.extension else "m4a"
+            val tempName = "${prefix}_${getDefaultBaseName()}.$ext"
             val dest = File(saveDir, tempName)
             srcFile.copyTo(dest, overwrite = true)
             Result.success(dest)

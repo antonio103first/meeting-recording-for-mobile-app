@@ -25,14 +25,16 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.graphics.Color
 import com.krunventures.meetingrecorder.ui.theme.*
+import com.krunventures.meetingrecorder.viewmodel.MeetingListViewModel
 import com.krunventures.meetingrecorder.viewmodel.SettingsUiState
 import com.krunventures.meetingrecorder.viewmodel.SettingsViewModel
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(viewModel: SettingsViewModel) {
+fun SettingsScreen(viewModel: SettingsViewModel, listVm: MeetingListViewModel) {
     val state by viewModel.uiState.collectAsState()
+    val listState by listVm.uiState.collectAsState()
     val scrollState = rememberScrollState()
 
     // Google Sign-In launcher
@@ -102,6 +104,20 @@ fun SettingsScreen(viewModel: SettingsViewModel) {
         }
     }
 
+    // DB 내보내기 launcher — 사용자가 저장 위치를 직접 지정
+    val exportDbLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        if (uri != null) listVm.exportMeetings(uri)
+    }
+
+    // DB 가져오기 launcher
+    val importDbLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri != null) listVm.importMeetings(uri)
+    }
+
     var selectedTab by remember { mutableStateOf(0) }
     val tabs = listOf("⚙ 엔진 설정", "🔑 API 키", "💾 저장/Drive")
 
@@ -141,7 +157,7 @@ fun SettingsScreen(viewModel: SettingsViewModel) {
             when (selectedTab) {
                 0 -> EngineSettingsTab(viewModel, state)
                 1 -> ApiKeysTab(viewModel, state)
-                2 -> StorageDriveTab(viewModel, state, safBasePickerLauncher, safAudioPickerLauncher, safSttPickerLauncher, safSummaryPickerLauncher, obsidianPickerLauncher, signInLauncher)
+                2 -> StorageDriveTab(viewModel, state, safBasePickerLauncher, safAudioPickerLauncher, safSttPickerLauncher, safSummaryPickerLauncher, obsidianPickerLauncher, signInLauncher, onExportDb = { exportDbLauncher.launch("meeting_backup_${java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault()).format(java.util.Date())}.json") }, onImportDb = { importDbLauncher.launch("application/json") }, onScanLocalFiles = { listVm.scanLocalFiles() }, dbStatus = listState.statusMessage)
             }
             Spacer(Modifier.height(80.dp))
         }
@@ -496,7 +512,11 @@ private fun StorageDriveTab(
     safSttPickerLauncher: androidx.activity.result.ActivityResultLauncher<android.net.Uri?>,
     safSummaryPickerLauncher: androidx.activity.result.ActivityResultLauncher<android.net.Uri?>,
     obsidianPickerLauncher: androidx.activity.result.ActivityResultLauncher<android.net.Uri?>,
-    signInLauncher: androidx.activity.result.ActivityResultLauncher<android.content.Intent>
+    signInLauncher: androidx.activity.result.ActivityResultLauncher<android.content.Intent>,
+    onExportDb: () -> Unit,
+    onImportDb: () -> Unit,
+    onScanLocalFiles: () -> Unit,
+    dbStatus: String
 ) {
     // Local Storage Path — Separate Folders (v2.0)
     Card(colors = CardDefaults.cardColors(containerColor = CardBg), elevation = CardDefaults.cardElevation(2.dp)) {
@@ -624,6 +644,45 @@ private fun StorageDriveTab(
                 ) {
                     Text("Obsidian 저장 해제", fontSize = 12.sp, color = Danger)
                 }
+            }
+        }
+    }
+
+    // DB 백업 / 복원
+    Card(colors = CardDefaults.cardColors(containerColor = CardBg), elevation = CardDefaults.cardElevation(2.dp)) {
+        Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+            Text("🗄 DB 백업 / 복원", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = TextDark)
+            Divider(modifier = Modifier.padding(vertical = 8.dp))
+            Text(
+                "앱 재설치 후에도 회의 목록을 복구할 수 있습니다.\n내보낸 JSON 파일을 안전한 곳에 보관하세요.",
+                fontSize = 12.sp, color = TextLight
+            )
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = onExportDb,
+                    colors = ButtonDefaults.buttonColors(containerColor = Accent),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("📤 내보내기", fontSize = 13.sp)
+                }
+                OutlinedButton(
+                    onClick = onImportDb,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("📥 가져오기", fontSize = 13.sp)
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = onScanLocalFiles,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("🔍 로컬 파일 스캔 (기존 파일 DB 등록)", fontSize = 13.sp)
+            }
+            if (dbStatus.isNotEmpty()) {
+                Spacer(Modifier.height(6.dp))
+                Text(dbStatus, fontSize = 12.sp, color = if (dbStatus.startsWith("✅")) Success else Danger)
             }
         }
     }

@@ -183,6 +183,44 @@ Google Drive 로그인이 작동하지 않음 — `google-services.json`의 `oau
 
 ---
 
+## Phase 8: 음성메모 모드 + 회의목록 즉시 등록 (2026-05-24)
+
+### v3.4 — 녹음 정지 즉시 회의목록 자동 등록
+
+**배경:**
+기존에는 녹음 정지 → STT/요약 파이프라인 완료 → 파일명 입력 후에야 회의목록에 등록되었음.
+사용자가 녹음만 하고 변환을 나중에 실행하는 패턴에서 목록이 비어있어 파일을 찾을 수 없는 문제 발생.
+
+**문제 (logcat 확인):**
+```
+saveRecordingImmediately — mode=MEETING, file=REC_20260524_122846.m4a
+```
+MEETING 모드는 preliminary DB insert가 없어 목록에 미표시 → 수동 "가져오기" 필요
+
+**수정 내용:**
+
+1. **`RecordingViewModel.kt`**
+   - `pendingMeetingId: Long = -1L` 필드 추가
+   - `saveRecordingImmediately()`: VOICE_MEMO/MEETING 모두 녹음 정지 즉시 `dao.insert()` → 각각 `pendingVoiceMemoId` / `pendingMeetingId`에 ID 저장
+   - `confirmFileName()`: `pendingMeetingId > 0`이면 `dao.update*()`으로 기존 레코드 갱신 (update-or-insert 패턴)
+   - `cancelFileName()` / `confirmFileName.finally`: `pendingMeetingId = -1L` 리셋
+
+2. **음성메모 파이프라인 (`runVoiceMemo()`)**
+   - 별도 경량 파이프라인: 파일명 다이얼로그 없이 자동 저장
+   - 파일명 고정: `메모녹음_YYYYMMDD_HHmmss.m4a` (녹음), `메모녹음_YYYYMMDD.txt/.md` (STT/요약)
+   - 2~3문장 간단 요약 템플릿 (`SUMMARY_VOICE_MEMO`)
+   - Obsidian `00_Inbox/voice_memos/` 자동 저장
+
+3. **`SettingsScreen.kt`**
+   - DB 백업 카드에 "🔍 로컬 파일 스캔" 버튼 추가 (`listVm.scanLocalFiles()`)
+
+4. **`MeetingListViewModel.kt`**
+   - `scanLocalFiles()`: 앱 전용 오디오 디렉토리 + SAF 오디오 디렉토리 스캔, STT/요약 파일 자동 매핑 후 DB 일괄 등록
+
+**결과:** 녹음 정지 즉시 회의목록에 `REC_YYYYMMDD_HHmmss.m4a` / `메모녹음_YYYYMMDD_HHmmss.m4a` 표시, 파이프라인 완료 후 파일명 자동 업데이트
+
+---
+
 ## 개발 통계
 
 | 항목 | 수치 |

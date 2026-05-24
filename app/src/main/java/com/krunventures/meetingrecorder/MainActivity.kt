@@ -127,7 +127,7 @@ fun MeetingRecorderApp() {
             when (selectedTab) {
                 0 -> RecordingScreen(recordingVm)
                 1 -> MeetingListScreen(listVm)
-                2 -> SettingsScreen(settingsVm)
+                2 -> SettingsScreen(settingsVm, listVm)
             }
         }
     }
