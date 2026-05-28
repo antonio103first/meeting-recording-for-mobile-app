@@ -1,10 +1,20 @@
-# CLAUDE.md — 회의녹음요약 모바일 앱 v3.4
+# CLAUDE.md — 회의녹음요약 모바일 앱 v3.4.1
 
-> v3.4 (2026-05-24): 녹음 정지 즉시 회의목록 자동 등록 + 음성메모 파이프라인 완성
+> v3.4.1 (2026-05-29): 음성메모 Obsidian 저장 폴더 회귀 버그 수정 — `00_Inbox/voice_memos/` 서브폴더에 정확히 저장
 >
 > **이전 버전:**
+> - v3.4 (2026-05-24): 녹음 정지 즉시 회의목록 자동 등록 + 음성메모 파이프라인 완성
 > - PC 데스크톱 v3.0.8 동기화 (2026-05-12): 파일 저장명 포맷 `_YYYYMMDD_모드` (언더스코어)
 > - PC 데스크톱 v3.0.6 동기화 (2026-05-06): 전 양식 Q&A 규칙 통일, 컨퍼런스/간담회 양식
+
+## v3.4.1 주요 변경사항 (2026-05-29)
+
+**버그 수정**: 음성메모(VOICE_MEMO 모드)가 의도와 다르게 Obsidian vault 루트에 저장되던 회귀 문제 해결.
+
+- **RecordingViewModel.kt:1558-1567** `runVoiceMemo()` 의 Obsidian 저장 호출을 `writeTextToSafDir()` → `writeTextToSafSubDir(uri, "00_Inbox/voice_memos", "...md")` 로 변경
+- v3.4 주석에는 "00_Inbox/voice_memos 자동 저장"으로 명시돼 있었으나 실제 코드는 vault 루트 직접 저장 — 일반 회의록과 같은 폴더에 섞여 들어가는 회귀였음
+- 결과: 음성메모는 항상 `{vault}/00_Inbox/voice_memos/음성메모_YYYYMMDD_HHmmss.md` 에 저장됨
+- 자동화 `voice_memo_inject` 모듈 (Obsidian-Automation 저장소 v2.17.1) 이 이 폴더를 정상 픽업하여 daily note ✅ Action Items 섹션에 1회만 주입
 
 
 ## 프로젝트 개요
