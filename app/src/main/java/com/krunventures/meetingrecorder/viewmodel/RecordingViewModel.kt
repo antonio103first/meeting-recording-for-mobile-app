@@ -1503,8 +1503,12 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
             updateUiState { it.copy(summaryText = summaryText, summaryStatus = "요약 완료") }
 
             // Step 3: 파일 저장
-            val dateStr = SimpleDateFormat("yyyyMMdd", java.util.Locale.getDefault()).format(Date())
-            val baseName = "메모녹음_$dateStr"
+            // ⚠️ 파일명 규칙: 음성메모_YYYYMMDD_HHmmss
+            // → Obsidian 자동화 voice_memo_inject 의 정규식과 매칭 (^(?:음성메모|요약|회의록\d*|voice_memo)_\d{8}_\d{6}$)
+            //   및 inbox_router 의 VOICE_MEMO_PREFIX_RE 와도 매칭되어
+            //   저녁 동기화 시 06_Resources/음성메모 로 라우팅·다음날 데일리노트에 자동 주입됨
+            val dateStr = SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault()).format(Date())
+            val baseName = "음성메모_$dateStr"
             val created = SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.KOREAN).format(Date())
 
             // STT → 메모녹음_YYYYMMDD.txt
@@ -1551,11 +1555,12 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                 Log.e(TAG, "VoiceMemo summary save failed", e)
             }
 
-            // Obsidian vault → 00_Inbox/voice_memos/메모녹음_YYYYMMDD.md
+            // Obsidian vault → 설정된 경로(예: 08_회의록) 루트에 메모녹음_YYYYMMDD.md 저장
+            // 일반 회의록과 동일하게 obsidianUri 루트에 직접 저장하여 모든 요약 템플릿을 단일 폴더로 통일
             val obsidianUri = config.obsidianVaultDir
             val obsidianSaved = if (obsidianUri.isNotBlank()) {
                 try {
-                    config.writeTextToSafSubDir(mdContent, obsidianUri, "00_Inbox/voice_memos", "${baseName}.md")
+                    config.writeTextToSafDir(mdContent, obsidianUri, "${baseName}.md")
                 } catch (e: Exception) {
                     Log.e(TAG, "VoiceMemo Obsidian save failed", e); null
                 }
@@ -1595,7 +1600,7 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
             val status = buildString {
                 append("✅ 음성메모 저장 완료")
                 append("\n📝 ${baseName}.txt / 📋 ${baseName}.md")
-                if (obsidianSaved != null) append("\n📓 Obsidian: 00_Inbox/voice_memos/")
+                if (obsidianSaved != null) append("\n📓 Obsidian 저장 완료")
             }
             updateUiState { it.copy(isProcessing = false, saveStatus = status) }
             NotificationHelper.notifySummaryComplete(getApplication(), "${baseName}.md")
