@@ -1,11 +1,26 @@
-# CLAUDE.md — 회의녹음요약 모바일 앱 v3.4.1
+# CLAUDE.md — 회의녹음요약 모바일 앱 v3.4.2
 
-> v3.4.1 (2026-05-29): 음성메모 Obsidian 저장 폴더 회귀 버그 수정 — `00_Inbox/voice_memos/` 서브폴더에 정확히 저장
+> v3.4.2 (2026-05-31): 회의록 요약본 Obsidian 저장 폴더 수정 — vault 루트 → `08_회의록/` 서브폴더
 >
 > **이전 버전:**
+> - v3.4.1 (2026-05-29): 음성메모 Obsidian 저장 폴더 회귀 버그 수정 — `00_Inbox/voice_memos/` 서브폴더에 정확히 저장
 > - v3.4 (2026-05-24): 녹음 정지 즉시 회의목록 자동 등록 + 음성메모 파이프라인 완성
 > - PC 데스크톱 v3.0.8 동기화 (2026-05-12): 파일 저장명 포맷 `_YYYYMMDD_모드` (언더스코어)
 > - PC 데스크톱 v3.0.6 동기화 (2026-05-06): 전 양식 Q&A 규칙 통일, 컨퍼런스/간담회 양식
+
+## v3.4.2 주요 변경사항 (2026-05-31)
+
+**버그 수정**: 회의록 요약본이 Obsidian vault 루트에 저장되던 문제 해결. 이제 모든 양식의 요약본이 `{vault}/08_회의록/` 서브폴더로 저장됨.
+
+- **RecordingViewModel.kt** 3개 Obsidian 저장 지점 모두 `writeTextToSafDir()` → `writeTextToSafSubDir(uri, OBSIDIAN_MEETING_SUBDIR, "...md")` 로 변경
+  - L704: 요약 완료 즉시 저장 (`runSummary` 임시 저장)
+  - L848: 메인 vault 저장 (`confirmFileName` 최종 저장)
+  - L1363: 재요약 완료 즉시 저장 (`resummarize` 임시 저장)
+- 신규 companion 상수 `OBSIDIAN_MEETING_SUBDIR = "08_회의록"`
+- 7개 양식(주간회의/다자간협의/회의록업무/IR미팅/전화통화메모/네트워킹/강의요약) 전부 동일 적용 — 요약본은 파일명·양식과 무관하게 항상 `08_회의록/` 에 들어감
+- 음성메모는 기존 `00_Inbox/voice_memos/` 유지 (v3.4.1)
+- versionCode 7→8, versionName 3.4.1→3.4.2
+
 
 ## v3.4.1 주요 변경사항 (2026-05-29)
 

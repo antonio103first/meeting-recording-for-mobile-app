@@ -62,6 +62,8 @@ data class RecordingUiState(
 class RecordingViewModel(app: Application) : AndroidViewModel(app) {
     companion object {
         private const val TAG = "RecordingVM"
+        // ★ v3.4.2: 회의록 요약본은 Obsidian vault 의 08_회의록/ 서브폴더에 저장 (vault 루트 직접 저장 금지)
+        private const val OBSIDIAN_MEETING_SUBDIR = "08_회의록"
     }
 
     private val config = ConfigManager(app)
@@ -696,10 +698,10 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                         config.writeTextToSafDir(summaryText, summarySafUriImmediate, "${tempSummaryFileName}.txt")
                         Log.d(TAG, "Summary immediate SAF save done")
                     }
-                    // Obsidian에도 즉시 저장
+                    // Obsidian에도 즉시 저장 (★ v3.4.2: 08_회의록 서브폴더)
                     val obsidianUriImmediate = config.obsidianVaultDir
                     if (obsidianUriImmediate.isNotBlank()) {
-                        config.writeTextToSafDir(summaryText, obsidianUriImmediate, "${tempSummaryFileName}.md")
+                        config.writeTextToSafSubDir(summaryText, obsidianUriImmediate, OBSIDIAN_MEETING_SUBDIR, "${tempSummaryFileName}.md")
                         Log.d(TAG, "Obsidian immediate save done")
                     }
                     updateUiState { it.copy(saveStatus = "✅ 회의록 저장 완료 — 파일이름을 입력해주세요...") }
@@ -837,13 +839,13 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                     Log.d(TAG, "Summary SAF direct save: $summarySafSaved (uri=$safResult)")
                 }
 
-                // ★ v3.0: Obsidian vault에 회의록을 .md 파일로 저장
+                // ★ v3.0: Obsidian vault에 회의록을 .md 파일로 저장 (★ v3.4.2: 08_회의록 서브폴더)
                 var obsidianSaved = false
                 val obsidianUri = config.obsidianVaultDir
                 if (obsidianUri.isNotBlank() && summaryText.isNotBlank()) {
                     try {
                         val mdFileName = "${fileName}.md"
-                        val obsResult = config.writeTextToSafDir(summaryText, obsidianUri, mdFileName)
+                        val obsResult = config.writeTextToSafSubDir(summaryText, obsidianUri, OBSIDIAN_MEETING_SUBDIR, mdFileName)
                         obsidianSaved = obsResult != null
                         Log.d(TAG, "Obsidian vault save: $obsidianSaved (uri=$obsResult)")
                     } catch (e: Exception) {
@@ -1355,10 +1357,10 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                         config.writeTextToSafDir(summaryText, summarySafUriImmediate, "${tempSummaryFileName}.txt")
                         Log.d(TAG, "Resummarize immediate SAF save done")
                     }
-                    // Obsidian에도 즉시 저장
+                    // Obsidian에도 즉시 저장 (★ v3.4.2: 08_회의록 서브폴더)
                     val obsidianUriImmediate = config.obsidianVaultDir
                     if (obsidianUriImmediate.isNotBlank()) {
-                        config.writeTextToSafDir(summaryText, obsidianUriImmediate, "${tempSummaryFileName}.md")
+                        config.writeTextToSafSubDir(summaryText, obsidianUriImmediate, OBSIDIAN_MEETING_SUBDIR, "${tempSummaryFileName}.md")
                         Log.d(TAG, "Resummarize immediate Obsidian save done")
                     }
                 } catch (e: Exception) {

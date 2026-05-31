@@ -4,6 +4,24 @@
 
 ---
 
+## [v3.4.2] — 2026-05-31
+
+### 수정 (Fixed)
+- **회의록 요약본이 Obsidian vault 루트에 저장되던 문제 해결** — 이제 항상 `{vault}/08_회의록/` 서브폴더에 저장
+  - `RecordingViewModel.kt` 의 3개 저장 지점 (요약 완료 즉시 저장 / 메인 vault 저장 / 재요약 즉시 저장) 모두 `writeTextToSafDir()` → `writeTextToSafSubDir(uri, "08_회의록", ...)` 로 변경
+  - 모든 양식(주간회의/다자간협의/회의록업무/IR미팅/전화통화메모/네트워킹/강의요약)의 요약본이 동일하게 `08_회의록/` 으로 들어감
+  - 음성메모는 기존대로 `00_Inbox/voice_memos/` 유지 (별도 파이프라인)
+  - 신규 상수 `OBSIDIAN_MEETING_SUBDIR = "08_회의록"`
+
+---
+
+## [v3.4.1] — 2026-05-29
+
+### 수정 (Fixed)
+- 음성메모(VOICE_MEMO 모드)가 Obsidian vault 루트에 저장되던 회귀 문제 해결 — `00_Inbox/voice_memos/` 서브폴더에 정확히 저장 (`writeTextToSafDir()` → `writeTextToSafSubDir()`)
+
+---
+
 ## [v3.4] — 2026-05-24
 
 ### 추가 (Added)

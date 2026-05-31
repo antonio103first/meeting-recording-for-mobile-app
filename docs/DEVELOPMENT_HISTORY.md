@@ -221,6 +221,27 @@ MEETING 모드는 preliminary DB insert가 없어 목록에 미표시 → 수동
 
 ---
 
+## Phase 4: Obsidian 저장 폴더 정리 (2026-05-29 ~ 05-31)
+
+### v3.4.1 — 음성메모 저장 폴더 회귀 수정 (2026-05-29)
+
+음성메모가 의도와 달리 Obsidian vault 루트에 저장되던 회귀를 수정. `writeTextToSafDir()` → `writeTextToSafSubDir(uri, "00_Inbox/voice_memos", ...)`. 자동화 `voice_memo_inject` 모듈이 정상 픽업하도록 복구.
+
+### v3.4.2 — 회의록 요약본 저장 폴더 수정 (2026-05-31)
+
+**문제:** 회의록 요약본(.md)이 모든 양식에서 Obsidian vault 루트에 저장됨 → vault 최상위가 회의록 파일로 어지럽혀짐.
+
+**수정:** `RecordingViewModel.kt` 의 Obsidian 저장 3개 지점을 모두 `08_회의록/` 서브폴더 저장으로 변경.
+
+1. **`RecordingViewModel.kt`**
+   - companion object에 상수 `OBSIDIAN_MEETING_SUBDIR = "08_회의록"` 추가
+   - L704 (`runSummary` 즉시 저장), L848 (`confirmFileName` 최종 저장), L1363 (재요약 즉시 저장) 모두 `writeTextToSafDir()` → `writeTextToSafSubDir(uri, OBSIDIAN_MEETING_SUBDIR, ...)`
+2. **`build.gradle.kts`** — versionCode 7→8, versionName 3.4.1→3.4.2
+
+**결과:** 7개 양식(주간회의/다자간협의/회의록업무/IR미팅/전화통화메모/네트워킹/강의요약) 요약본이 파일명·양식과 무관하게 항상 `{vault}/08_회의록/` 에 저장됨. 음성메모는 `00_Inbox/voice_memos/` 유지.
+
+---
+
 ## 개발 통계
 
 | 항목 | 수치 |
