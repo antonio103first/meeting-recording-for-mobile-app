@@ -2,26 +2,69 @@ package com.krunventures.meetingrecorder.service
 
 import android.content.Context
 import android.media.AudioFocusRequest
+import android.media.AudioFormat
 import android.media.AudioManager
+import android.media.AudioRecord
+import android.media.MediaCodec
+import android.media.MediaCodecInfo
+import android.media.MediaFormat
+import android.media.MediaMuxer
 import android.media.MediaRecorder
+import android.media.audiofx.AcousticEchoCanceler
+import android.media.audiofx.AutomaticGainControl
+import android.media.audiofx.NoiseSuppressor
 import android.os.Build
 import android.util.Log
+import com.krunventures.meetingrecorder.data.ConfigManager
 import java.io.File
-import java.io.IOException
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.text.SimpleDateFormat
 import java.util.*
+import kotlin.math.abs
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
 enum class RecordingState { IDLE, RECORDING, PAUSED, AUDIO_FOCUS_LOST }
 
+/**
+ * ★ v3.5: 녹음 엔진을 MediaRecorder → AudioRecord + MediaCodec 파이프라인으로 교체.
+ *
+ * MediaRecorder에는 입력 음량(게인) 조절 API가 전혀 없어서 "녹음이 너무 작다"는
+ * 문제를 해결할 수 없었다. 이제 AudioRecord로 16-bit PCM 원본을 직접 캡처하여
+ * 샘플마다 소프트웨어 게인(ConfigManager.recordingGain, 기본 3.0배)을 곱하고
+ * 클리핑(±32767) 방지 후 MediaCodec(AAC-LC)로 인코딩, MediaMuxer로 M4A(MPEG-4)에 저장한다.
+ *
+ * - AGC(자동 게인)·AEC(에코 제거)는 비활성화하여 수동 게인이 그대로 적용되도록 한다.
+ * - NoiseSuppressor는 활성화하여 증폭 시 잡음만 같이 커지는 것을 줄인다.
+ * - v3.0의 오디오 포커스 인터럽트 완전 차단 로직은 그대로 유지한다.
+ */
 class AudioRecorderManager(private val context: Context) {
     companion object {
         private const val TAG = "AudioRecorderManager"
+        private const val SAMPLE_RATE = 16000          // STT 표준 입력 (CLOVA/Whisper)
+        private const val AAC_BIT_RATE = 32000         // 32kbps AAC — 음성 녹음 최적
+        private const val DEFAULT_GAIN = 4.0f          // 기본 증폭 배수
+        private const val MIN_GAIN = 1.0f
+        private const val MAX_GAIN = 8.0f
     }
 
-    private var recorder: MediaRecorder? = null
+    private val config = ConfigManager(context)
+
+    private var audioRecord: AudioRecord? = null
+    private var encoder: MediaCodec? = null
+    private var muxer: MediaMuxer? = null
+    private var agc: AutomaticGainControl? = null
+    private var aec: AcousticEchoCanceler? = null
+    private var ns: NoiseSuppressor? = null
+
+    private var trackIndex = -1
+    private var muxerStarted = false
+    @Volatile private var totalSamplesRead = 0L  // 인코더에 큐잉된 누적 프레임 수 (PTS 계산용)
+
     private var outputFile: File? = null
+    private var gain: Float = DEFAULT_GAIN
+
     private var startTime: Long = 0
     private var pausedDuration: Long = 0
     private var pauseStartTime: Long = 0
@@ -45,6 +88,10 @@ class AudioRecorderManager(private val context: Context) {
     private var timerThread: Thread? = null
     @Volatile private var timerRunning = false
 
+    private var recordThread: Thread? = null
+    @Volatile private var recordingActive = false
+    @Volatile private var paused = false
+
     // ★ v3.0.2: 녹음 중 인터럽트 완전 차단 + 자동 포커스 재요청
     // 전화, 카메라, 다른 앱의 마이크 점유 등 모든 오디오 포커스 변경을 무시하고 녹음 계속 진행
     private val audioFocusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
@@ -52,7 +99,6 @@ class AudioRecorderManager(private val context: Context) {
             AudioManager.AUDIOFOCUS_LOSS -> {
                 Log.w(TAG, "Audio focus lost permanently — 녹음 계속 진행 + 포커스 재요청")
                 _audioFocusLost.value = true
-                // ★ v3.0.2: 포커스를 잃어도 즉시 다시 요청하여 마이크 점유 유지
                 if (_state.value == RecordingState.RECORDING) {
                     val reacquired = requestAudioFocus()
                     Log.d(TAG, "Audio focus re-request after LOSS: $reacquired")
@@ -61,7 +107,6 @@ class AudioRecorderManager(private val context: Context) {
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
                 Log.w(TAG, "Audio focus lost temporarily — 녹음 계속 진행 + 포커스 재요청")
                 _audioFocusLost.value = true
-                // ★ v3.0.2: 일시적 손실에도 재요청
                 if (_state.value == RecordingState.RECORDING) {
                     val reacquired = requestAudioFocus()
                     Log.d(TAG, "Audio focus re-request after TRANSIENT: $reacquired")
@@ -100,53 +145,70 @@ class AudioRecorderManager(private val context: Context) {
             val file = File(saveDir, "${timestamp}_녹음.m4a")
             outputFile = file
 
-            // Step 2: MediaRecorder 생성 및 설정 (각 단계에서 예외 처리)
-            recorder = (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                MediaRecorder(context)
-            } else {
-                @Suppress("DEPRECATION")
-                MediaRecorder()
-            }).apply {
-                try {
-                    // ★ v3.0.2: VOICE_RECOGNITION은 시스템 우선순위가 높아 다른 앱에 마이크를 뺏기기 어려움
-                    setAudioSource(MediaRecorder.AudioSource.VOICE_RECOGNITION)
-                    setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-                    setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-                    setAudioEncodingBitRate(32000)   // 32kbps AAC — 음성 녹음 최적 (3시간=43MB, STT 인식률 동일)
-                    setAudioSamplingRate(16000)     // 16kHz — STT 엔진 표준 입력 샘플레이트 (CLOVA/Whisper 기본값)
-                    setAudioChannels(1)
-                    setOutputFile(file.absolutePath)
-                    prepare()
-                } catch (e: IllegalStateException) {
-                    Log.e(TAG, "MediaRecorder configuration error: ${e.message}", e)
-                    throw Exception("마이크 설정 오류 (다른 앱이 마이크 사용 중?): ${e.message}")
-                } catch (e: IOException) {
-                    Log.e(TAG, "MediaRecorder IO error: ${e.message}", e)
-                    throw Exception("파일 저장 오류: ${e.message}")
-                }
+            // ★ v3.5: 사용자 설정 게인 로드 (1.0~8.0 범위로 클램프)
+            gain = config.recordingGain.coerceIn(MIN_GAIN, MAX_GAIN)
 
-                try {
-                    start()
-                } catch (e: IllegalStateException) {
-                    Log.e(TAG, "MediaRecorder start error: ${e.message}", e)
-                    throw Exception("녹음 시작 오류: ${e.message}")
-                }
+            // Step 2: AudioRecord 생성
+            val minBuf = AudioRecord.getMinBufferSize(
+                SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
+            )
+            if (minBuf == AudioRecord.ERROR || minBuf == AudioRecord.ERROR_BAD_VALUE) {
+                throw Exception("마이크 설정 오류: AudioRecord 버퍼 크기 계산 실패")
             }
+            val bufferSizeBytes = maxOf(minBuf, 4096) * 2
 
+            val record = AudioRecord(
+                // VOICE_RECOGNITION: 시스템 우선순위가 높아 다른 앱에 마이크를 뺏기기 어려움
+                MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                SAMPLE_RATE,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                bufferSizeBytes
+            )
+            if (record.state != AudioRecord.STATE_INITIALIZED) {
+                record.release()
+                throw Exception("마이크 초기화 실패 (다른 앱이 마이크 사용 중?)")
+            }
+            audioRecord = record
+
+            // ★ v3.5: 음성 효과 — AGC/AEC OFF (수동 게인 보존), NoiseSuppressor ON (증폭 잡음 억제)
+            setupAudioEffects(record.audioSessionId)
+
+            // Step 3: MediaCodec AAC 인코더 + MediaMuxer 구성
+            val format = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, SAMPLE_RATE, 1).apply {
+                setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
+                setInteger(MediaFormat.KEY_BIT_RATE, AAC_BIT_RATE)
+                setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, bufferSizeBytes)
+            }
+            val enc = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)
+            enc.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            enc.start()
+            encoder = enc
+
+            muxer = MediaMuxer(file.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+            trackIndex = -1
+            muxerStarted = false
+            totalSamplesRead = 0L
+
+            // Step 4: 캡처 스레드 시작
+            record.startRecording()
+            recordingActive = true
+            paused = false
             startTime = System.currentTimeMillis()
             pausedDuration = 0
             wasAudioFocusLost = false
             _state.value = RecordingState.RECORDING
             _elapsedSeconds.value = 0
+            _amplitude.value = 0f
+            startCaptureThread(bufferSizeBytes)
             startTimer()
-            Log.d(TAG, "Recording started: ${file.absolutePath}")
+            Log.d(TAG, "Recording started: ${file.absolutePath} (gain=${gain}x)")
             Result.success(file)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start recording: ${e.message}", e)
             _state.value = RecordingState.IDLE
-            releaseMediaRecorder()
+            releasePipeline()
             abandonAudioFocus()
-            // 에러 유형 구분: 파일 접근 에러 vs 마이크 에러
             val errorMsg = when {
                 e.message?.contains("EPERM") == true || e.message?.contains("Permission denied") == true ->
                     "파일 저장 경로 접근 불가 (EPERM).\n저장 폴더를 기본값으로 변경하거나 앱 전용 폴더를 사용해주세요.\n\n경로: ${saveDir.absolutePath}"
@@ -158,6 +220,141 @@ class AudioRecorderManager(private val context: Context) {
         }
     }
 
+    private fun setupAudioEffects(sessionId: Int) {
+        try {
+            if (AutomaticGainControl.isAvailable()) {
+                agc = AutomaticGainControl.create(sessionId)?.apply { enabled = false }
+                Log.d(TAG, "AGC disabled (manual gain in control)")
+            }
+        } catch (e: Exception) { Log.w(TAG, "AGC setup failed: ${e.message}") }
+        try {
+            if (AcousticEchoCanceler.isAvailable()) {
+                aec = AcousticEchoCanceler.create(sessionId)?.apply { enabled = false }
+            }
+        } catch (e: Exception) { Log.w(TAG, "AEC setup failed: ${e.message}") }
+        try {
+            if (NoiseSuppressor.isAvailable()) {
+                ns = NoiseSuppressor.create(sessionId)?.apply { enabled = true }
+                Log.d(TAG, "NoiseSuppressor enabled")
+            }
+        } catch (e: Exception) { Log.w(TAG, "NS setup failed: ${e.message}") }
+    }
+
+    private fun startCaptureThread(bufferSizeBytes: Int) {
+        recordThread = Thread {
+            val pcm = ShortArray(bufferSizeBytes / 2)
+            try {
+                while (recordingActive) {
+                    if (paused) {
+                        Thread.sleep(20)
+                        continue
+                    }
+                    val record = audioRecord ?: break
+                    val read = record.read(pcm, 0, pcm.size)
+                    if (read > 0) {
+                        // ★ 게인 적용 + 클리핑 방지 + 진폭 측정
+                        var maxAmp = 0
+                        for (i in 0 until read) {
+                            var s = (pcm[i] * gain).toInt()
+                            if (s > 32767) s = 32767 else if (s < -32768) s = -32768
+                            pcm[i] = s.toShort()
+                            val a = abs(s)
+                            if (a > maxAmp) maxAmp = a
+                        }
+                        _amplitude.value = (maxAmp / 32768f).coerceIn(0f, 1f)
+                        encodePcm(pcm, read)
+                    }
+                    drainEncoder(false)
+                }
+                // EOS 신호 후 잔여 출력 flush
+                encodeEndOfStream()
+                drainEncoder(true)
+            } catch (e: Exception) {
+                Log.e(TAG, "Capture thread error: ${e.message}", e)
+            }
+        }.also { it.isDaemon = true; it.priority = Thread.MAX_PRIORITY; it.start() }
+    }
+
+    /** PCM 샘플(short[])을 바이트로 변환하여 인코더 입력 버퍼에 큐잉 */
+    private fun encodePcm(pcm: ShortArray, sampleCount: Int) {
+        val enc = encoder ?: return
+        val byteCount = sampleCount * 2
+        val bytes = ByteBuffer.allocate(byteCount).order(ByteOrder.LITTLE_ENDIAN)
+        for (i in 0 until sampleCount) bytes.putShort(pcm[i])
+        val data = bytes.array()
+
+        var attempts = 0
+        while (attempts < 5) {
+            val inIndex = enc.dequeueInputBuffer(10000)
+            if (inIndex >= 0) {
+                val inBuf = enc.getInputBuffer(inIndex) ?: return
+                inBuf.clear()
+                inBuf.put(data, 0, byteCount)
+                val pts = totalSamplesRead * 1_000_000L / SAMPLE_RATE
+                enc.queueInputBuffer(inIndex, 0, byteCount, pts, 0)
+                totalSamplesRead += sampleCount
+                return
+            } else {
+                // 입력 버퍼가 없으면 출력을 비워 버퍼를 회수한 뒤 재시도
+                drainEncoder(false)
+                attempts++
+            }
+        }
+        Log.w(TAG, "Dropped a PCM chunk: encoder input unavailable")
+    }
+
+    private fun encodeEndOfStream() {
+        val enc = encoder ?: return
+        var attempts = 0
+        while (attempts < 100) {
+            val inIndex = enc.dequeueInputBuffer(10000)
+            if (inIndex >= 0) {
+                val pts = totalSamplesRead * 1_000_000L / SAMPLE_RATE
+                enc.queueInputBuffer(inIndex, 0, 0, pts, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                return
+            }
+            drainEncoder(false)
+            attempts++
+        }
+    }
+
+    private fun drainEncoder(endOfStream: Boolean) {
+        val enc = encoder ?: return
+        val mux = muxer ?: return
+        val bufferInfo = MediaCodec.BufferInfo()
+        while (true) {
+            val outIndex = enc.dequeueOutputBuffer(bufferInfo, 10000)
+            when {
+                outIndex == MediaCodec.INFO_TRY_AGAIN_LATER -> {
+                    if (!endOfStream) return  // 더 기다리지 않음
+                    // EOS 대기 중에는 계속 폴링
+                }
+                outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                    if (!muxerStarted) {
+                        trackIndex = mux.addTrack(enc.outputFormat)
+                        mux.start()
+                        muxerStarted = true
+                    }
+                }
+                outIndex >= 0 -> {
+                    val encoded = enc.getOutputBuffer(outIndex)
+                    if (encoded != null) {
+                        if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
+                            bufferInfo.size = 0
+                        }
+                        if (bufferInfo.size > 0 && muxerStarted) {
+                            encoded.position(bufferInfo.offset)
+                            encoded.limit(bufferInfo.offset + bufferInfo.size)
+                            mux.writeSampleData(trackIndex, encoded, bufferInfo)
+                        }
+                    }
+                    enc.releaseOutputBuffer(outIndex, false)
+                    if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) return
+                }
+            }
+        }
+    }
+
     private fun requestAudioFocus(): Boolean {
         if (audioManager == null) {
             Log.w(TAG, "AudioManager not available")
@@ -165,7 +362,6 @@ class AudioRecorderManager(private val context: Context) {
         }
         return try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                // Android 8.0+ : AudioFocusRequest 사용
                 // ★ v3.0: AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE — 다른 앱의 오디오를 완전 차단
                 val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE)
                     .setAudioAttributes(
@@ -175,13 +371,12 @@ class AudioRecorderManager(private val context: Context) {
                             .build()
                     )
                     .setOnAudioFocusChangeListener(audioFocusChangeListener)
-                    .setWillPauseWhenDucked(false)  // ★ v3.0: ducking 시에도 녹음 계속
+                    .setWillPauseWhenDucked(false)
                     .build()
                 audioFocusRequest = request
                 val result = audioManager.requestAudioFocus(request)
                 result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
             } else {
-                // Android 7.1 이하
                 @Suppress("DEPRECATION")
                 val result = audioManager.requestAudioFocus(
                     audioFocusChangeListener,
@@ -211,21 +406,38 @@ class AudioRecorderManager(private val context: Context) {
         }
     }
 
-    private fun releaseMediaRecorder() {
+    /** 캡처 스레드 종료 대기 + AudioRecord/MediaCodec/MediaMuxer/효과 해제 */
+    private fun releasePipeline() {
+        recordingActive = false
         try {
-            recorder?.stop()
+            recordThread?.join(3000)
         } catch (_: Exception) {}
+        recordThread = null
+
+        try { audioRecord?.stop() } catch (_: Exception) {}
+        try { audioRecord?.release() } catch (_: Exception) {}
+        audioRecord = null
+
+        try { encoder?.stop() } catch (_: Exception) {}
+        try { encoder?.release() } catch (_: Exception) {}
+        encoder = null
+
         try {
-            recorder?.release()
+            if (muxerStarted) muxer?.stop()
         } catch (_: Exception) {}
-        recorder = null
+        try { muxer?.release() } catch (_: Exception) {}
+        muxer = null
+        muxerStarted = false
+
+        try { agc?.release() } catch (_: Exception) {}
+        try { aec?.release() } catch (_: Exception) {}
+        try { ns?.release() } catch (_: Exception) {}
+        agc = null; aec = null; ns = null
     }
 
     fun pauseRecording() {
         if (_state.value == RecordingState.RECORDING) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                recorder?.pause()
-            }
+            paused = true
             pauseStartTime = System.currentTimeMillis()
             _state.value = RecordingState.PAUSED
             timerRunning = false
@@ -234,9 +446,7 @@ class AudioRecorderManager(private val context: Context) {
 
     fun resumeRecording() {
         if (_state.value == RecordingState.PAUSED) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                recorder?.resume()
-            }
+            paused = false
             pausedDuration += System.currentTimeMillis() - pauseStartTime
             _state.value = RecordingState.RECORDING
             startTimer()
@@ -249,19 +459,12 @@ class AudioRecorderManager(private val context: Context) {
         }
         return try {
             timerRunning = false
-
-            // MediaRecorder stop/release 안전하게 처리
-            try {
-                recorder?.stop()
-                Log.d(TAG, "MediaRecorder stopped successfully")
-            } catch (e: IllegalStateException) {
-                Log.w(TAG, "MediaRecorder stop error (may indicate audio interruption): ${e.message}", e)
-                // stop() 실패해도 release() 진행
-            }
-
-            releaseMediaRecorder()
+            paused = false
+            // 캡처 스레드가 EOS flush + drain 까지 마치고 종료되도록 대기 후 자원 해제
+            releasePipeline()
             abandonAudioFocus()
             _state.value = RecordingState.IDLE
+            _amplitude.value = 0f
 
             val file = outputFile ?: return Result.failure(Exception("녹음 파일이 없습니다."))
             if (file.exists() && file.length() > 0) {
@@ -274,7 +477,7 @@ class AudioRecorderManager(private val context: Context) {
         } catch (e: Exception) {
             Log.e(TAG, "Failed to stop recording: ${e.message}", e)
             _state.value = RecordingState.IDLE
-            releaseMediaRecorder()
+            releasePipeline()
             abandonAudioFocus()
             Result.failure(Exception("중지 오류: ${e.message}"))
         }
@@ -288,11 +491,6 @@ class AudioRecorderManager(private val context: Context) {
                 if (_state.value == RecordingState.RECORDING) {
                     val elapsed = (System.currentTimeMillis() - startTime - pausedDuration) / 1000
                     _elapsedSeconds.value = elapsed
-                    // Update amplitude
-                    try {
-                        val maxAmp = recorder?.maxAmplitude ?: 0
-                        _amplitude.value = (maxAmp / 32768f).coerceIn(0f, 1f)
-                    } catch (_: Exception) {}
                 }
             }
         }.also { it.isDaemon = true; it.start() }
@@ -309,7 +507,7 @@ class AudioRecorderManager(private val context: Context) {
     fun release() {
         Log.d(TAG, "Releasing AudioRecorderManager resources")
         timerRunning = false
-        releaseMediaRecorder()
+        releasePipeline()
         abandonAudioFocus()
         _state.value = RecordingState.IDLE
     }

@@ -1376,7 +1376,7 @@ private fun SummaryModeBottomSheet(
                 Triple("ir_md", "IR 미팅",
                     "IR 미팅 노트 — 기술해자·펀드적합성·투자매력도\n3대 분석축, 경쟁사 비교표, 스코어링"),
                 Triple("phone", "전화통화 메모",
-                    "전화통화 — 주제별 1~2줄 압축 요약\n[Antonio] 화자 표기, Q&A 보충 주석"),
+                    "전화통화 — 주제별 2~3줄 요약 (Q&A 없음)\n[Antonio] 화자 표기, 팩트 기반 서술"),
                 Triple("flow", "네트워킹(티타임)",
                     "비공식 미팅·티타임 — 주제별 압축 요약\n현황/주요내용 소항목, Q&A 주석"),
                 Triple("lecture_md", "강의 요약",

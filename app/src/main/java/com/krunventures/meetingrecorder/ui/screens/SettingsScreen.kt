@@ -296,6 +296,30 @@ private fun EngineSettingsTab(
             }
         }
     }
+
+    // ★ v3.5: 녹음 입력 음량(게인) — 녹음이 작게 들릴 때 키운다
+    Card(colors = CardDefaults.cardColors(containerColor = CardBg), elevation = CardDefaults.cardElevation(2.dp)) {
+        Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Text("녹음 음량 (게인)", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = TextDark, modifier = Modifier.weight(1f))
+                Text("${String.format("%.1f", state.recordingGain)}배", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Accent)
+            }
+            Divider(modifier = Modifier.padding(vertical = 8.dp))
+            var gainSlider by remember(state.recordingGain) { mutableStateOf(state.recordingGain) }
+            Slider(
+                value = gainSlider,
+                onValueChange = { gainSlider = it },
+                onValueChangeFinished = { viewModel.setRecordingGain(gainSlider) },
+                valueRange = 1f..8f,
+                steps = 13,  // 1.0~8.0, 0.5 단위
+                colors = SliderDefaults.colors(thumbColor = Accent, activeTrackColor = Accent)
+            )
+            Text(
+                "현재 ${String.format("%.1f", gainSlider)}배 · 1.0=원본, 4.0=기본. 너무 높으면 소리가 찌그러질(클리핑) 수 있습니다.",
+                fontSize = 11.sp, color = TextLight
+            )
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

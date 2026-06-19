@@ -31,6 +31,7 @@ data class SettingsUiState(
     val summaryMode: String = "speaker",
     val numSpeakers: Int = 2,
     val autoSpeakerDetection: Boolean = true,
+    val recordingGain: Float = 4.0f,
     val audioSaveDir: String = "",
     val sttSaveDir: String = "",
     val summarySaveDir: String = "",
@@ -84,6 +85,7 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         summaryMode = config.summaryMode,
         numSpeakers = config.numSpeakers,
         autoSpeakerDetection = config.autoSpeakerDetection,
+        recordingGain = config.recordingGain,
         audioSaveDir = config.audioSaveDir.absolutePath,
         sttSaveDir = config.sttSaveDir.absolutePath,
         summarySaveDir = config.summarySaveDir.absolutePath,
@@ -145,6 +147,12 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     fun setAutoSpeakerDetection(auto: Boolean) {
         config.autoSpeakerDetection = auto
         _uiState.value = _uiState.value.copy(autoSpeakerDetection = auto)
+    }
+
+    fun setRecordingGain(gain: Float) {
+        val clamped = gain.coerceIn(1.0f, 8.0f)
+        config.recordingGain = clamped
+        _uiState.value = _uiState.value.copy(recordingGain = clamped)
     }
 
     fun setUserSelectedBaseDir(uri: String) {

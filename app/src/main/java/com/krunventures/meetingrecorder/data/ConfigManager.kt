@@ -48,6 +48,12 @@ class ConfigManager(private val context: Context) {
         get() = prefs.getString("summary_mode", "speaker") ?: "speaker"
         set(v) = prefs.edit().putString("summary_mode", v).apply()
 
+    // ★ v3.5: 녹음 입력 게인(증폭 배수). AudioRecorderManager가 PCM 샘플에 곱해 음량을 키운다.
+    // 1.0 = 원본, 4.0 = 기본(4배), 최대 8.0. 너무 높으면 클리핑(찌그러짐) 발생.
+    var recordingGain: Float
+        get() = prefs.getFloat("recording_gain", 4.0f)
+        set(v) = prefs.edit().putFloat("recording_gain", v.coerceIn(1.0f, 8.0f)).apply()
+
     // === Storage Paths (Android 16 호환 — 앱 전용 디렉토리 사용) ===
     // getExternalFilesDir()는 권한 없이 읽기/쓰기 가능, 앱 삭제 시 같이 삭제됨
     private val defaultBaseDir: String
@@ -396,6 +402,41 @@ class ConfigManager(private val context: Context) {
             null
         } catch (e: Exception) {
             Log.e(TAG, "❌ SAF 서브폴더 저장 실패: $fileName → $safUriString", e)
+            null
+        }
+    }
+
+    /**
+     * SAF 트리 내 서브폴더의 텍스트 파일을 읽는다. 파일이 없으면 null.
+     * 데일리 노트(01_Daily/daily_YYYYMMDD.md) 존재 확인·읽기에 사용.
+     *
+     * @param safUriString Obsidian vault SAF tree URI
+     * @param subPath 서브폴더 경로 (예: "01_Daily"). 빈 문자열이면 루트.
+     * @param fileName 파일명 (예: "daily_20260616.md")
+     * @return 파일 내용, 없거나 실패 시 null
+     */
+    fun readTextFromSafSubDir(
+        safUriString: String,
+        subPath: String,
+        fileName: String
+    ): String? {
+        if (safUriString.isBlank()) return null
+        return try {
+            val treeUri = Uri.parse(safUriString)
+            var currentDoc = DocumentFile.fromTreeUri(context, treeUri) ?: return null
+            for (segment in subPath.split("/").filter { it.isNotBlank() }) {
+                currentDoc = currentDoc.findFile(segment) ?: return null
+            }
+            val target = currentDoc.findFile(fileName) ?: return null
+            if (!target.exists() || !target.isFile) return null
+            context.contentResolver.openInputStream(target.uri)?.use { input ->
+                input.readBytes().toString(Charsets.UTF_8)
+            }
+        } catch (e: SecurityException) {
+            Log.e(TAG, "❌ SAF 권한 만료 (readText): $fileName → $safUriString", e)
+            null
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ SAF 읽기 실패: $fileName → $safUriString", e)
             null
         }
     }

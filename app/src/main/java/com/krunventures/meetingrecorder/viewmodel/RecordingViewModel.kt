@@ -1557,12 +1557,28 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                 Log.e(TAG, "VoiceMemo summary save failed", e)
             }
 
-            // ★ v3.4.1: 음성메모는 Obsidian vault 의 00_Inbox/voice_memos/ 서브폴더에 저장
-            // (일반 회의록과 폴더 분리 — 자동화 voice_memo_inject 가 daily note action item 으로 픽업)
+            // ★ v3.5: Obsidian 저장 위치 분기 (아침 동기화 전/후)
+            //  - 당일 데일리 노트(01_Daily/daily_YYYYMMDD.md)가 존재하면 = 아침 자동화가 이미 실행됨
+            //    → 데일리 노트의 ## ✅ Action Items 섹션에 요약을 직접 주입
+            //  - 데일리 노트가 아직 없으면 = 아침 동기화 전
+            //    → 기존대로 00_Inbox/voice_memos/ 에 저장 (저녁 자동화 voice_memo_inject 가 나중에 픽업)
             val obsidianUri = config.obsidianVaultDir
-            val obsidianSaved = if (obsidianUri.isNotBlank()) {
+            var savedToDailyNote = false
+            val obsidianSaved: String? = if (obsidianUri.isNotBlank()) {
                 try {
-                    config.writeTextToSafSubDir(mdContent, obsidianUri, "00_Inbox/voice_memos", "${baseName}.md")
+                    val today = SimpleDateFormat("yyyyMMdd", java.util.Locale.getDefault()).format(Date())
+                    val dailyName = "daily_$today.md"
+                    val dailyContent = config.readTextFromSafSubDir(obsidianUri, "01_Daily", dailyName)
+                    if (dailyContent != null) {
+                        val updated = injectIntoDailyNoteActionItems(dailyContent, baseName, summaryText)
+                        val res = config.writeTextToSafSubDir(updated, obsidianUri, "01_Daily", dailyName)
+                        savedToDailyNote = res != null
+                        Log.d(TAG, "VoiceMemo → 데일리 노트 Action Items 주입: $dailyName (success=$savedToDailyNote)")
+                        res
+                    } else {
+                        Log.d(TAG, "당일 데일리 노트 없음 → 00_Inbox/voice_memos 저장")
+                        config.writeTextToSafSubDir(mdContent, obsidianUri, "00_Inbox/voice_memos", "${baseName}.md")
+                    }
                 } catch (e: Exception) {
                     Log.e(TAG, "VoiceMemo Obsidian save failed", e); null
                 }
@@ -1602,7 +1618,10 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
             val status = buildString {
                 append("✅ 음성메모 저장 완료")
                 append("\n📝 ${baseName}.txt / 📋 ${baseName}.md")
-                if (obsidianSaved != null) append("\n📓 Obsidian 저장 완료")
+                if (obsidianSaved != null) {
+                    append(if (savedToDailyNote) "\n📓 데일리 노트 Action Items 주입 완료"
+                           else "\n📓 Obsidian voice_memos 저장 완료")
+                }
             }
             updateUiState { it.copy(isProcessing = false, saveStatus = status) }
             NotificationHelper.notifySummaryComplete(getApplication(), "${baseName}.md")
@@ -1611,6 +1630,31 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
         } catch (e: Throwable) {
             Log.e(TAG, "VoiceMemo pipeline error", e)
             updateUiState { it.copy(isProcessing = false, error = "음성메모 처리 오류:\n${e.message?.take(300)}") }
+        }
+    }
+
+    /**
+     * ★ v3.5: 데일리 노트의 `## ✅ Action Items` 섹션에 음성메모 요약을 주입한다.
+     * - 마커(`<!-- 🤖 from-mobile-voicememo | baseName -->`)로 멱등 보장 (재실행 시 중복 주입 안 함)
+     * - 섹션 헤더 바로 다음에 삽입 (Today Call/주식 브리핑 등 ### 하위 섹션보다 위, 눈에 잘 띄게)
+     * - Action Items 섹션이 없으면 문서 끝에 새로 만들어 추가
+     */
+    private fun injectIntoDailyNoteActionItems(content: String, baseName: String, summaryText: String): String {
+        val marker = "<!-- 🤖 from-mobile-voicememo | $baseName -->"
+        if (content.contains(marker)) return content  // 이미 주입됨
+
+        val time = SimpleDateFormat("HH:mm", java.util.Locale.KOREAN).format(Date())
+        // 요약 본문은 각 줄을 4칸 들여써서 상위 불릿의 연속 내용으로 렌더링되게 함
+        val indentedSummary = summaryText.trim().lines().joinToString("\n") { "    ${it.trim()}" }
+        val block = "- 🎙️ 음성메모 $time $marker\n$indentedSummary"
+
+        val lines = content.split("\n").toMutableList()
+        val headerIdx = lines.indexOfFirst { it.trimStart().startsWith("## ") && it.contains("Action Items") }
+        return if (headerIdx < 0) {
+            content.trimEnd() + "\n\n## ✅ Action Items\n" + block + "\n"
+        } else {
+            lines.add(headerIdx + 1, block)
+            lines.joinToString("\n")
         }
     }
 
