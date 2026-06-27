@@ -75,6 +75,16 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                 || config.getSafUriForSummary().isNotBlank()
     }
 
+    /** ★ v3.6: 설정된 STT 엔진의 키가 누락됐으면 에러 메시지, 정상이면 null (음성메모 자동 실행 사전검증용) */
+    private fun sttKeyError(): String? = when (config.sttEngine) {
+        "clova" -> if (config.clovaInvokeUrl.isBlank() || config.clovaSecretKey.isBlank())
+            "CLOVA Speech API 키가 설정되지 않았습니다.\n설정 탭에서 Invoke URL과 Secret Key를 입력해주세요." else null
+        "whisper" -> if (config.chatGptApiKey.isBlank())
+            "OpenAI API 키가 설정되지 않았습니다.\n설정 탭에서 OpenAI API 키를 입력해주세요." else null
+        else -> if (config.geminiApiKey.isBlank())
+            "Gemini API 키가 설정되지 않았습니다.\n설정 탭에서 Gemini API 키를 입력해주세요." else null
+    }
+
     private val recorderManager = AudioRecorderManager(app)
     private val callManager = CallManager(app)
     private val clovaService = ClovaService()
@@ -430,6 +440,24 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                             updateUiState { it.copy(
                                 saveStatus = "✅ 녹음 저장 완료 (Drive 업로드 실패)"
                             ) }
+                        }
+                    }
+
+                    // ★ v3.6: 음성메모 모드 — 녹음 정지 즉시 STT→요약→Obsidian 자동 파이프라인 실행
+                    // (별도 "음성 메모 저장" 버튼 없이 정지만 누르면 메모 저장·요약·Obsidian 저장까지 모두 자동화)
+                    if (currentMode == RecordingMode.VOICE_MEMO) {
+                        val sttErr = sttKeyError()
+                        val hasSummaryKey = config.claudeApiKey.isNotBlank() || config.geminiApiKey.isNotBlank()
+                        when {
+                            sttErr != null -> updateUiState { it.copy(error = sttErr) }
+                            !hasSummaryKey -> updateUiState { it.copy(
+                                error = "Claude 또는 Gemini API 키가 필요합니다.\n설정 탭에서 API 키를 입력해주세요."
+                            ) }
+                            else -> {
+                                updateUiState { it.copy(isProcessing = true, error = null) }
+                                Log.d(TAG, "VoiceMemo auto-pipeline starting — file: ${audioFile.name}")
+                                runVoiceMemo(audioFile)
+                            }
                         }
                     }
                 } else {

@@ -53,6 +53,10 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
     val scrollState = rememberScrollState()
     val haptic = LocalHapticFeedback.current
 
+    // ★ v3.6: 음성 메모 모드 — 녹음 정지 시 자동으로 STT·요약·Obsidian 저장이 진행되므로
+    // 파일 선택/수동 실행 버튼/재요약 등 부가 기능을 숨기고 STT 변환 결과·회의록 요약 결과만 표시
+    val isVoiceMemo = state.recordingMode == RecordingMode.VOICE_MEMO
+
     // 전체보기 다이얼로그 상태
     var fullScreenTitle by remember { mutableStateOf("") }
     var fullScreenText by remember { mutableStateOf("") }
@@ -393,25 +397,26 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
                         }
                     }
 
-                    Spacer(Modifier.height(12.dp))
-
-                    // Current file + file picker
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("선택 파일", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text(state.currentFile, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface,
-                                maxLines = 1)
-                        }
-                        OutlinedButton(
-                            onClick = { filePicker.launch("audio/*") },
-                            shape = RoundedCornerShape(12.dp)
+                    // Current file + file picker (회의 녹음 모드에서만 — 음성 메모는 정지 시 자동 처리)
+                    if (!isVoiceMemo) {
+                        Spacer(Modifier.height(12.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(Icons.Filled.FolderOpen, null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("파일 선택", fontSize = 13.sp)
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("선택 파일", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(state.currentFile, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1)
+                            }
+                            OutlinedButton(
+                                onClick = { filePicker.launch("audio/*") },
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Icon(Icons.Filled.FolderOpen, null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("파일 선택", fontSize = 13.sp)
+                            }
                         }
                     }
                 }
@@ -443,53 +448,69 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
                         Text(state.sttStatus, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
 
-                    // ★ v3.0: MP3 파일 선택 버튼 (STT 변환할 오디오 파일 직접 선택)
-                    OutlinedButton(
-                        onClick = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            filePicker.launch("audio/*")
-                        },
-                        enabled = !state.isProcessing,
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).height(44.dp),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Icon(Icons.Filled.AudioFile, null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            if (state.currentFile != "(없음)") "🎵 ${state.currentFile}" else "🎵 MP3/M4A 파일 선택",
-                            fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
-                        )
-                    }
-
-                    // Pipeline start button (녹음 후 자동 또는 파일 선택 후 수동)
-                    Button(
-                        onClick = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            viewModel.startPipeline()
-                        },
-                        enabled = !state.isProcessing && state.recordingState == RecordingState.IDLE,
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp).height(52.dp),
-                        shape = RoundedCornerShape(14.dp)
-                    ) {
+                    if (isVoiceMemo) {
+                        // ★ v3.6: 음성 메모 — 정지 시 자동 처리 안내 (수동 버튼 없음)
                         if (state.isProcessing) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(20.dp),
-                                color = Color.White,
-                                strokeWidth = 2.dp
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Text("처리 중...", fontSize = 16.sp)
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                                Spacer(Modifier.width(8.dp))
+                                Text("자동 처리 중...", fontSize = 14.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
                         } else {
-                            Icon(Icons.Filled.PlayArrow, null, modifier = Modifier.size(22.dp))
+                            Text(
+                                "녹음 정지 시 STT 변환·요약·Obsidian 저장이 자동으로 진행됩니다.",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(vertical = 6.dp)
+                            )
+                        }
+                    } else {
+                        // ★ v3.0: MP3 파일 선택 버튼 (STT 변환할 오디오 파일 직접 선택)
+                        OutlinedButton(
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                filePicker.launch("audio/*")
+                            },
+                            enabled = !state.isProcessing,
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).height(44.dp),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(Icons.Filled.AudioFile, null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(6.dp))
                             Text(
-                                if (state.recordingMode == RecordingMode.VOICE_MEMO)
-                                    "📝 음성 메모 저장"
-                                else
-                                    "▶ STT 변환 시작",
-                                fontSize = 16.sp, fontWeight = FontWeight.Bold
+                                if (state.currentFile != "(없음)") "🎵 ${state.currentFile}" else "🎵 MP3/M4A 파일 선택",
+                                fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
                             )
+                        }
+
+                        // Pipeline start button (녹음 후 자동 또는 파일 선택 후 수동)
+                        Button(
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                viewModel.startPipeline()
+                            },
+                            enabled = !state.isProcessing && state.recordingState == RecordingState.IDLE,
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp).height(52.dp),
+                            shape = RoundedCornerShape(14.dp)
+                        ) {
+                            if (state.isProcessing) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(20.dp),
+                                    color = Color.White,
+                                    strokeWidth = 2.dp
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text("처리 중...", fontSize = 16.sp)
+                            } else {
+                                Icon(Icons.Filled.PlayArrow, null, modifier = Modifier.size(22.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("▶ STT 변환 시작", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                            }
                         }
                     }
 
@@ -546,38 +567,41 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
                     HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp),
                         color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
 
-                    // ★ v3.0: STT txt 파일 선택 버튼 (회의록 요약 단독 실행용)
-                    OutlinedButton(
-                        onClick = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            sttFilePicker.launch("text/*")
-                        },
-                        enabled = !state.isProcessing,
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).height(44.dp),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Icon(Icons.Filled.Description, null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            if (state.selectedSttFile.isNotEmpty()) "📄 ${state.selectedSttFile}" else "📄 STT txt 파일 선택",
-                            fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
-                        )
-                    }
+                    // 회의 녹음 모드 전용 — STT txt 파일 선택 + 회의록 요약 단독 실행 (음성 메모는 자동)
+                    if (!isVoiceMemo) {
+                        // ★ v3.0: STT txt 파일 선택 버튼 (회의록 요약 단독 실행용)
+                        OutlinedButton(
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                sttFilePicker.launch("text/*")
+                            },
+                            enabled = !state.isProcessing,
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).height(44.dp),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(Icons.Filled.Description, null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                if (state.selectedSttFile.isNotEmpty()) "📄 ${state.selectedSttFile}" else "📄 STT txt 파일 선택",
+                                fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
+                            )
+                        }
 
-                    // ★ v3.0: 회의록 요약만 시작 버튼 (STT txt 선택 후 또는 실패 후 재시작)
-                    Button(
-                        onClick = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            viewModel.showResummarizeOptions()
-                        },
-                        enabled = !state.isProcessing && (state.sttText.isNotEmpty() || state.selectedSttText.isNotEmpty()),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32)),
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).height(48.dp),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Icon(Icons.Filled.Refresh, null, modifier = Modifier.size(20.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("▶ 회의록 요약 시작", fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                        // ★ v3.0: 회의록 요약만 시작 버튼 (STT txt 선택 후 또는 실패 후 재시작)
+                        Button(
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                viewModel.showResummarizeOptions()
+                            },
+                            enabled = !state.isProcessing && (state.sttText.isNotEmpty() || state.selectedSttText.isNotEmpty()),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32)),
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).height(48.dp),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(Icons.Filled.Refresh, null, modifier = Modifier.size(20.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("▶ 회의록 요약 시작", fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                        }
                     }
 
                     if (state.summaryProgress > 0) {
@@ -631,8 +655,8 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
                 }
             }
 
-            // === Section 4: Key Metrics ===
-            if (state.metricsText.isNotEmpty()) {
+            // === Section 4: Key Metrics === (회의 녹음 모드 전용)
+            if (!isVoiceMemo && state.metricsText.isNotEmpty()) {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -669,7 +693,8 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
                 }
             }
 
-            // === Section 5: 재요약 (STT 변환파일 기반) ===
+            // === Section 5: 재요약 (STT 변환파일 기반) === (회의 녹음 모드 전용)
+            if (!isVoiceMemo) {
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -768,6 +793,7 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
                     }
                 }
             }
+            } // if (!isVoiceMemo) — 재요약 카드
 
             // === Save Status ===
             Card(
