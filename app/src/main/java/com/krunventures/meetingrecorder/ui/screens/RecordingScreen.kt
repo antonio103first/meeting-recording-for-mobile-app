@@ -15,7 +15,10 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -45,6 +48,10 @@ import com.krunventures.meetingrecorder.service.RecordingState
 import com.krunventures.meetingrecorder.ui.theme.*
 import com.krunventures.meetingrecorder.viewmodel.RecordingMode
 import com.krunventures.meetingrecorder.viewmodel.RecordingViewModel
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlin.math.sin
 
 @Composable
@@ -61,6 +68,10 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
     var fullScreenTitle by remember { mutableStateOf("") }
     var fullScreenText by remember { mutableStateOf("") }
     var showFullScreen by remember { mutableStateOf(false) }
+
+    // ★ v3.6.1: 인앱 파일 선택 다이얼로그(최신 날짜순) 표시 상태
+    var showAudioPicker by remember { mutableStateOf(false) }
+    var showSttPicker by remember { mutableStateOf(false) }
 
     val filePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
@@ -132,6 +143,42 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
             currentMode = "speaker",
             onDismiss = { viewModel.dismissResummarizeSheet() },
             onSelect = { mode -> viewModel.startResummarize(mode) }
+        )
+    }
+
+    // ★ v3.6.1: MP3/M4A 인앱 파일 선택 다이얼로그 (최신 날짜순 정렬)
+    if (showAudioPicker) {
+        LocalFilePickerDialog(
+            title = "녹음 파일 선택",
+            emptyHint = "앱에 저장된 녹음 파일이 없습니다.\n‘기기에서 찾기’로 직접 선택해주세요.",
+            files = remember { viewModel.listLocalAudioFiles() },
+            onPick = { file ->
+                showAudioPicker = false
+                viewModel.setAudioFile(file)
+            },
+            onBrowseDevice = {
+                showAudioPicker = false
+                filePicker.launch("audio/*")
+            },
+            onDismiss = { showAudioPicker = false }
+        )
+    }
+
+    // ★ v3.6.1: STT 변환 텍스트 인앱 파일 선택 다이얼로그 (최신 날짜순 정렬)
+    if (showSttPicker) {
+        LocalFilePickerDialog(
+            title = "STT 변환파일 선택",
+            emptyHint = "앱에 저장된 STT 변환 파일이 없습니다.\n‘기기에서 찾기’로 직접 선택해주세요.",
+            files = remember { viewModel.listLocalSttFiles() },
+            onPick = { file ->
+                showSttPicker = false
+                viewModel.selectSttFile(file)
+            },
+            onBrowseDevice = {
+                showSttPicker = false
+                sttFilePicker.launch("text/*")
+            },
+            onDismiss = { showSttPicker = false }
         )
     }
 
@@ -410,7 +457,7 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
                                     maxLines = 1)
                             }
                             OutlinedButton(
-                                onClick = { filePicker.launch("audio/*") },
+                                onClick = { showAudioPicker = true },
                                 shape = RoundedCornerShape(12.dp)
                             ) {
                                 Icon(Icons.Filled.FolderOpen, null, modifier = Modifier.size(18.dp))
@@ -470,10 +517,11 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
                         }
                     } else {
                         // ★ v3.0: MP3 파일 선택 버튼 (STT 변환할 오디오 파일 직접 선택)
+                        // ★ v3.6.1: 인앱 선택 다이얼로그(최신 날짜순)로 변경
                         OutlinedButton(
                             onClick = {
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                filePicker.launch("audio/*")
+                                showAudioPicker = true
                             },
                             enabled = !state.isProcessing,
                             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).height(44.dp),
@@ -570,10 +618,11 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
                     // 회의 녹음 모드 전용 — STT txt 파일 선택 + 회의록 요약 단독 실행 (음성 메모는 자동)
                     if (!isVoiceMemo) {
                         // ★ v3.0: STT txt 파일 선택 버튼 (회의록 요약 단독 실행용)
+                        // ★ v3.6.1: 인앱 선택 다이얼로그(최신 날짜순)로 변경
                         OutlinedButton(
                             onClick = {
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                sttFilePicker.launch("text/*")
+                                showSttPicker = true
                             },
                             enabled = !state.isProcessing,
                             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).height(44.dp),
@@ -744,9 +793,9 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
                         Spacer(Modifier.height(8.dp))
                     }
 
-                    // STT 파일 선택 버튼
+                    // STT 파일 선택 버튼 (★ v3.6.1: 인앱 선택 다이얼로그·최신 날짜순)
                     OutlinedButton(
-                        onClick = { sttFilePicker.launch("*/*") },
+                        onClick = { showSttPicker = true },
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(12.dp)
                     ) {
@@ -1462,30 +1511,142 @@ private fun SummaryModeBottomSheet(
 
             Spacer(Modifier.height(20.dp))
 
+            // ★ v3.6.1: 하단 취소/요약 실행 버튼 키움 (높이 60dp·글자 18sp) — 터치 영역 확대
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 OutlinedButton(
                     onClick = onDismiss,
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(12.dp)
+                    modifier = Modifier.weight(1f).height(60.dp),
+                    shape = RoundedCornerShape(14.dp)
                 ) {
-                    Text("취소", fontSize = 15.sp)
+                    Text("취소", fontSize = 18.sp)
                 }
                 Button(
                     onClick = { onSelect(selectedMode) },
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).height(60.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.primary
                     ),
-                    shape = RoundedCornerShape(12.dp)
+                    shape = RoundedCornerShape(14.dp)
                 ) {
-                    Text("요약 실행", fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                    Text("요약 실행", fontSize = 18.sp, fontWeight = FontWeight.Bold)
                 }
             }
 
             Spacer(Modifier.height(24.dp)) // Bottom safe area
+        }
+    }
+}
+
+/**
+ * ★ v3.6.1: 인앱 파일 선택 다이얼로그.
+ * 앱에 저장된 파일을 항상 '최신 날짜순(내림차순)'으로 보여준다.
+ * (시스템 파일 선택기의 정렬 순서는 앱에서 제어할 수 없어 직접 목록을 구성)
+ * 목록에 없는 파일은 하단의 '기기에서 찾기'로 시스템 선택기를 열어 선택할 수 있다.
+ */
+@Composable
+private fun LocalFilePickerDialog(
+    title: String,
+    emptyHint: String,
+    files: List<File>,
+    onPick: (File) -> Unit,
+    onBrowseDevice: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val dateFmt = remember { SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()) }
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 4.dp
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(20.dp)
+            ) {
+                Text(
+                    title,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 19.sp,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    "최신 날짜순",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(12.dp))
+
+                if (files.isEmpty()) {
+                    Text(
+                        emptyHint,
+                        fontSize = 13.sp,
+                        lineHeight = 19.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 16.dp)
+                    )
+                } else {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 420.dp)
+                    ) {
+                        items(files) { file ->
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onPick(file) }
+                                    .padding(vertical = 12.dp, horizontal = 4.dp)
+                            ) {
+                                Text(
+                                    file.name,
+                                    fontSize = 15.sp,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Spacer(Modifier.height(2.dp))
+                                Text(
+                                    "${dateFmt.format(Date(file.lastModified()))}  ·  " +
+                                        "${"%.1f".format(file.length() / (1024.0 * 1024.0))}MB",
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            HorizontalDivider(
+                                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
+                            )
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(16.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.weight(1f).height(52.dp),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Text("취소", fontSize = 15.sp)
+                    }
+                    Button(
+                        onClick = onBrowseDevice,
+                        modifier = Modifier.weight(1f).height(52.dp),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Icon(Icons.Filled.FolderOpen, null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("기기에서 찾기", fontSize = 15.sp)
+                    }
+                }
+            }
         }
     }
 }

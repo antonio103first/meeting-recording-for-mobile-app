@@ -83,7 +83,11 @@ class ClaudeService {
         return try {
             onProgress?.invoke(10)
             val dt = SimpleDateFormat("yyyy년 MM월 dd일 HH:mm", Locale.KOREAN).format(Date())
-            var prompt = template.replace("{text}", sttText.take(500000)).replace("{dt}", dt)
+            // ★ v3.7: {today} — 음성 메모 날짜 해석용 기준 날짜(요일 포함)
+            val today = SimpleDateFormat("yyyy-MM-dd (EEEE)", Locale.KOREAN).format(Date())
+            var prompt = template.replace("{text}", sttText.take(500000))
+                .replace("{dt}", dt)
+                .replace("{today}", today)
             if (customInstruction.isNotBlank()) {
                 prompt += "\n\n[추가 지시사항]\n${customInstruction.trim()}"
             }

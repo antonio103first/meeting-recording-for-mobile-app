@@ -908,16 +908,30 @@ class GeminiService {
 ---
 회의녹음요약 앱 자동 생성"""
 
-        val SUMMARY_VOICE_MEMO = """다음 음성 메모에서 요점만 뽑아 간결하고 임팩트 있게 정리해줘.
-말하는 사람이 길게 주절거려도 군더더기·반복·잡담·배경 설명은 모두 버리고 핵심만 남겨.
+        // ★ v3.7: 음성 메모를 '날짜 인식 액션 아이템'으로 구조화(JSON 출력).
+        // 상대 날짜 표현은 녹음 시점(오늘)을 기준으로 절대 날짜(YYYY-MM-DD)로 변환한다.
+        // 앱이 이 JSON을 파싱해 frontmatter action_items + 사람이 읽는 요약을 만든다.
+        val SUMMARY_VOICE_MEMO = """다음 음성 메모를 분석하여 할 일(액션 아이템)을 추출하고, 각 항목에 해당 날짜를 붙여 JSON으로만 출력해줘.
 
-규칙:
-- 가장 중요한 메시지를 1~2문장으로 압축. 불필요한 수식어·인사말·서두는 제거
-- 서로 다른 핵심이 2개 이상이면 짧은 불릿(-)으로 나눠 작성 (각 불릿 한 줄, 명료한 단문)
-- 할 일·일정(날짜)·수치(금액·마감 등)가 언급됐으면 반드시 포함
-- 녹취에 없는 내용은 절대 추가하지 않음
-- 머리말·마무리 문장 없이 결과만 출력
-- 한국어로 작성
+[기준 날짜]
+오늘은 {today} 이다.
+"오늘/내일/모레/글피", "이번주 ○요일", "다음주 ○요일", "○일 후" 같은 상대 표현은 반드시 이 기준 날짜로 계산하여 절대 날짜(YYYY-MM-DD)로 변환할 것.
+"7월 3일", "7/3" 처럼 연도가 없는 날짜는 기준 날짜의 연도(또는 이미 지났으면 다음 해)로 보정할 것.
+
+[추출 규칙]
+- 음성 메모에서 실제로 해야 할 일·일정·약속만 액션 아이템으로 추출. 군더더기·잡담·배경 설명은 버린다.
+- 각 액션 아이템의 date(YYYY-MM-DD) 판정:
+  - 일정·약속·부킹 등 특정 날짜에 일어나는 일 → 그 날짜
+  - "N일까지", "N일 전까지" 처럼 마감이 있는 준비 작업 → 사용자가 그 일을 처리/리마인드 받아야 하는 날(=마감일)을 date 로 한다
+    예) "7월 5일 간담회 대비 7월 2일까지 자료 작성" → date="2026-07-02", text="주주간담회 자료 작성 (7/5 간담회 대비)"
+  - 날짜 단서가 전혀 없으면 date=null
+- text: 시간·장소·금액 등 핵심 정보를 포함한 간결한 한 줄(명료한 단문). 녹취에 없는 내용은 추가하지 않는다.
+- summary: 전체 메모의 핵심을 1~2문장으로 압축(액션 아이템이 비어 있을 때 사용).
+
+[출력 형식 — 아래 JSON 한 개만 출력. 코드펜스(```)·설명·머리말 금지]
+{"summary":"핵심 요약","action_items":[{"date":"YYYY-MM-DD 또는 null","text":"할 일 한 줄"}]}
+
+액션 아이템이 없으면 "action_items":[] 로 두고 summary 만 채운다.
 
 [음성 메모]
 {text}
@@ -943,7 +957,8 @@ class GeminiService {
         apiKey: String,
         contents: JsonArray,
         temperature: Float = 0.3f,
-        maxOutputTokens: Int = 65536
+        maxOutputTokens: Int = 65536,
+        thinkingBudget: Int? = null   // ★ v3.6.1: 0이면 thinking 비활성화(STT 토큰 소진 방지)
     ): ServiceResult {
         val trimmedKey = apiKey.trim()
         // ★ streamGenerateContent + alt=sse → Server-Sent Events 스트리밍
@@ -954,6 +969,14 @@ class GeminiService {
             add("generationConfig", JsonObject().apply {
                 addProperty("temperature", temperature)
                 addProperty("maxOutputTokens", maxOutputTokens)
+                // ★ v3.6.1: gemini-2.5-flash는 thinking 모델 — STT처럼 출력이 긴 작업에서
+                // thinking 토큰이 maxOutputTokens를 잠식해 응답이 비거나 잘리는 문제가 있음.
+                // thinkingBudget=0으로 thinking을 끄면 전체 토큰을 전사 결과에 사용 가능.
+                if (thinkingBudget != null) {
+                    add("thinkingConfig", JsonObject().apply {
+                        addProperty("thinkingBudget", thinkingBudget)
+                    })
+                }
             })
         }
 
@@ -971,46 +994,50 @@ class GeminiService {
                 return ServiceResult(false, friendlyError(errorBody))
             }
 
-            // SSE 스트림 파싱: 각 "data: {...}" 라인에서 텍스트 조각 수집
+            // ★ v3.6.1: SSE 스트림을 '라인 단위'로 파싱.
+            // 기존엔 8192바이트씩 읽고 즉시 readUtf8()을 호출해, JSON 한 건이나 UTF-8 멀티바이트
+            // 문자가 읽기 경계에서 쪼개지면 파싱 실패 → 전사 텍스트 유실 문제가 있었음.
+            // readUtf8Line()은 개행이 들어올 때까지 버퍼링하므로 라인/문자가 쪼개지지 않음.
             val fullText = StringBuilder()
             var blockReason: String? = null
+            var finishReason: String? = null
 
             response.body?.let { body ->
                 body.source().use { source ->
-                    val buffer = okio.Buffer()
-                    while (!source.exhausted()) {
-                        source.read(buffer, 8192)
-                        val chunk = buffer.readUtf8()
-                        // SSE 형식: "data: {json}\n\n"
-                        val dataLines = chunk.split("\n")
-                            .filter { it.startsWith("data: ") }
-                            .map { it.removePrefix("data: ").trim() }
+                    while (true) {
+                        val line = source.readUtf8Line() ?: break  // 스트림 종료
+                        if (!line.startsWith("data:")) continue     // SSE data 라인만 처리
+                        val dataLine = line.removePrefix("data:").trim()
+                        if (dataLine.isBlank()) continue
+                        try {
+                            val json = gson.fromJson(dataLine, JsonObject::class.java) ?: continue
 
-                        for (dataLine in dataLines) {
-                            if (dataLine.isBlank()) continue
-                            try {
-                                val json = gson.fromJson(dataLine, JsonObject::class.java) ?: continue
-
-                                // 차단 여부 확인
-                                json.getAsJsonObject("promptFeedback")?.get("blockReason")?.asString?.let {
-                                    blockReason = it
-                                }
-
-                                // 텍스트 조각 추출
-                                val candidates = json.getAsJsonArray("candidates") ?: continue
-                                if (candidates.size() == 0) continue
-                                val parts = candidates[0]?.asJsonObject
-                                    ?.getAsJsonObject("content")
-                                    ?.getAsJsonArray("parts") ?: continue
-                                for (i in 0 until parts.size()) {
-                                    parts[i]?.asJsonObject?.get("text")?.asString?.let { text ->
-                                        fullText.append(text)
-                                    }
-                                }
-                            } catch (e: Exception) {
-                                // 개별 chunk 파싱 실패는 무시 — 다음 chunk 계속 처리
-                                Log.w("GeminiService", "SSE chunk parse skip: ${e.message}")
+                            // 차단 여부 확인
+                            json.getAsJsonObject("promptFeedback")?.get("blockReason")?.asString?.let {
+                                blockReason = it
                             }
+
+                            val candidates = json.getAsJsonArray("candidates") ?: continue
+                            if (candidates.size() == 0) continue
+                            val candidate = candidates[0]?.asJsonObject ?: continue
+
+                            // 종료 사유 추적 (MAX_TOKENS 등 진단용)
+                            candidate.get("finishReason")?.takeIf { !it.isJsonNull }?.asString?.let {
+                                finishReason = it
+                            }
+
+                            // 텍스트 조각 추출
+                            val parts = candidate
+                                .getAsJsonObject("content")
+                                ?.getAsJsonArray("parts") ?: continue
+                            for (i in 0 until parts.size()) {
+                                parts[i]?.asJsonObject?.get("text")?.asString?.let { text ->
+                                    fullText.append(text)
+                                }
+                            }
+                        } catch (e: Exception) {
+                            // 개별 라인 파싱 실패는 무시 — 다음 라인 계속 처리
+                            Log.w("GeminiService", "SSE line parse skip: ${e.message}")
                         }
                     }
                 }
@@ -1022,7 +1049,14 @@ class GeminiService {
 
             val resultText = fullText.toString()
             if (resultText.isBlank()) {
-                return ServiceResult(false, "Gemini 응답이 비어 있습니다.")
+                // ★ v3.6.1: 빈 응답 원인을 사용자에게 노출 (특히 MAX_TOKENS)
+                val reasonHint = when (finishReason) {
+                    "MAX_TOKENS" -> "\n\n(출력 토큰 한도 초과 — 파일이 너무 길 수 있습니다. 더 짧게 나눠 시도해주세요.)"
+                    "SAFETY", "RECITATION" -> "\n\n(안전/정책 필터로 응답이 차단되었습니다: $finishReason)"
+                    null -> ""
+                    else -> "\n\n(종료 사유: $finishReason)"
+                }
+                return ServiceResult(false, "Gemini 응답이 비어 있습니다.$reasonHint")
             }
 
             ServiceResult(true, resultText)
@@ -1141,7 +1175,9 @@ class GeminiService {
 
         onProgress?.invoke(40)
 
-        val result = callGeminiApi(activeModel, apiKey, contents, temperature = 0.1f)
+        // ★ v3.6.1: STT는 thinking 비활성화(thinkingBudget=0) — thinking 토큰이 전사 출력을
+        // 잠식해 응답이 비거나 잘리던 문제 방지. 전체 출력 토큰을 전사 결과에 사용.
+        val result = callGeminiApi(activeModel, apiKey, contents, temperature = 0.1f, thinkingBudget = 0)
 
         if (result.success) {
             onProgress?.invoke(100)
@@ -1165,7 +1201,11 @@ class GeminiService {
         onProgress?.invoke(10)
 
         val dt = SimpleDateFormat("yyyy년 MM월 dd일 HH:mm", Locale.KOREAN).format(Date())
-        var prompt = template.replace("{text}", sttText.take(500000)).replace("{dt}", dt)
+        // ★ v3.7: {today} — 음성 메모 날짜 해석용 기준 날짜(요일 포함)
+        val today = SimpleDateFormat("yyyy-MM-dd (EEEE)", Locale.KOREAN).format(Date())
+        var prompt = template.replace("{text}", sttText.take(500000))
+            .replace("{dt}", dt)
+            .replace("{today}", today)
         if (customInstruction.isNotBlank()) {
             prompt += "\n\n[추가 지시사항]\n${customInstruction.trim()}"
         }

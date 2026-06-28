@@ -64,6 +64,9 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
         private const val TAG = "RecordingVM"
         // ★ v3.4.2: 회의록 요약본은 Obsidian vault 의 08_회의록/ 서브폴더에 저장 (vault 루트 직접 저장 금지)
         private const val OBSIDIAN_MEETING_SUBDIR = "08_회의록"
+        // ★ v3.7.1: 음성 메모 본문은 vault 06_Resources/음성메모/ 에 저장 → 데일리노트에서 위키링크로 참조.
+        //   자동화 voice_memo_inject 의 최종 위치(VOICE_MEMO_DIR)와 동일.
+        private const val VOICE_MEMO_VAULT_DIR = "06_Resources/음성메모"
     }
 
     private val config = ConfigManager(app)
@@ -541,6 +544,17 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
         currentAudioFile = file
         _uiState.value = _uiState.value.copy(currentFile = file.name)
     }
+
+    /**
+     * ★ v3.6.1: 앱에 저장된 녹음(오디오) 파일 목록 — 최신 날짜순(내림차순).
+     * 인앱 파일 선택 다이얼로그에서 사용. listAudioFiles가 lastModified 내림차순 정렬을 보장.
+     */
+    fun listLocalAudioFiles(): List<File> = fileManager.listAudioFiles(config.audioSaveDir)
+
+    /**
+     * ★ v3.6.1: 앱에 저장된 STT 변환 텍스트 파일 목록 — 최신 날짜순(내림차순).
+     */
+    fun listLocalSttFiles(): List<File> = fileManager.listSummaryFiles(config.sttSaveDir)
 
     fun setAudioFileFromUri(uri: Uri) {
         val context = getApplication<MeetingApp>()
@@ -1529,19 +1543,30 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                 updateUiState { it.copy(isProcessing = false, error = "요약 실패:\n${sumResult.second}") }
                 return
             }
-            val summaryText = sumResult.second
-            updateUiState { it.copy(summaryText = summaryText, summaryStatus = "요약 완료") }
+            val rawSummary = sumResult.second
+
+            // ★ v3.7: 음성 메모 JSON(요약 + 날짜별 액션 아이템) 파싱
+            val (parsedSummary, parsedItems) = parseVoiceMemoJson(rawSummary)
+            // 액션 아이템이 있으면 그것을, 없으면 요약(또는 원문 첫 줄)을 날짜 없는 단일 항목으로 폴백
+            val items: List<MemoItem> = when {
+                parsedItems.isNotEmpty() -> parsedItems
+                parsedSummary.isNotBlank() -> listOf(MemoItem(null, parsedSummary))
+                else -> listOf(MemoItem(null,
+                    rawSummary.trim().lines().firstOrNull { it.isNotBlank() }?.trim() ?: "음성 메모"))
+            }
+            // 사람이 읽는 요약 본문(## 요약 / UI 표시용)
+            val summaryDisplay = items.joinToString("\n") { renderMemoItemLine(it) }
+            updateUiState { it.copy(summaryText = summaryDisplay, summaryStatus = "요약 완료") }
 
             // Step 3: 파일 저장
             // ⚠️ 파일명 규칙: 음성메모_YYYYMMDD_HHmmss
             // → Obsidian 자동화 voice_memo_inject 의 정규식과 매칭 (^(?:음성메모|요약|회의록\d*|voice_memo)_\d{8}_\d{6}$)
-            //   및 inbox_router 의 VOICE_MEMO_PREFIX_RE 와도 매칭되어
-            //   저녁 동기화 시 06_Resources/음성메모 로 라우팅·다음날 데일리노트에 자동 주입됨
+            //   및 inbox_router 의 VOICE_MEMO_PREFIX_RE 와도 매칭됨
             val dateStr = SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault()).format(Date())
             val baseName = "음성메모_$dateStr"
             val created = SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.KOREAN).format(Date())
 
-            // STT → 메모녹음_YYYYMMDD.txt
+            // STT → 음성메모_YYYYMMDD_HHmmss.txt
             var sttSavedPath = ""
             try {
                 val sttResult2 = fileManager.saveSttText(sttText, config.sttSaveDir, baseName)
@@ -1555,19 +1580,23 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                 Log.e(TAG, "VoiceMemo STT save failed", e)
             }
 
-            // 요약 → 메모녹음_YYYYMMDD.md (frontmatter + 요약 + STT 원문)
-            val mdContent = buildString {
+            // 요약 → .md (frontmatter[action_items] + 요약 + STT 원문)
+            //  summaryItems = ## 요약(사람이 읽는 전체 기록), routeItems = 자동화가 라우팅할 항목(frontmatter)
+            //  자동화 voice_memo_inject 가 frontmatter action_items 의 date 로 날짜별 라우팅
+            fun buildMemoMd(summaryItems: List<MemoItem>, routeItems: List<MemoItem>): String = buildString {
                 appendLine("---")
                 appendLine("created: $created")
                 appendLine("type: voice_memo")
+                appendLine(yamlActionItems(routeItems))
                 appendLine("---")
                 appendLine()
                 appendLine("## 요약")
-                appendLine(summaryText.trim())
+                appendLine(summaryItems.joinToString("\n") { renderMemoItemLine(it) })
                 appendLine()
                 appendLine("## STT 원문")
                 append(sttText.trim())
             }
+            val mdContent = buildMemoMd(items, items)  // 로컬 전체 보관본 (전 항목)
 
             var summarySavedPath = ""
             try {
@@ -1585,28 +1614,41 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                 Log.e(TAG, "VoiceMemo summary save failed", e)
             }
 
-            // ★ v3.5: Obsidian 저장 위치 분기 (아침 동기화 전/후)
-            //  - 당일 데일리 노트(01_Daily/daily_YYYYMMDD.md)가 존재하면 = 아침 자동화가 이미 실행됨
-            //    → 데일리 노트의 ## ✅ Action Items 섹션에 요약을 직접 주입
-            //  - 데일리 노트가 아직 없으면 = 아침 동기화 전
-            //    → 기존대로 00_Inbox/voice_memos/ 에 저장 (저녁 자동화 voice_memo_inject 가 나중에 픽업)
+            // ★ v3.7.1: Obsidian 저장 — 날짜 인식 라우팅 + 메모 본문을 vault에 두어 위키링크 연결
+            //  - 메모 본문(.md)은 항상 vault 06_Resources/음성메모/ 에 저장 → 데일리노트에서 [[링크]]로 참조
+            //  - 날짜 없음 / 오늘 항목: 당일 데일리노트가 있으면 즉시 오늘 ## ✅ Action Items 주입(링크 포함)
+            //  - 나머지(미래·과거 날짜 항목, 또는 당일 노트 없을 때): frontmatter action_items 로 남겨
+            //    자동화 voice_memo_inject 가 날짜대로 라우팅. 즉시 주입분은 frontmatter에서 제외해 중복 방지
             val obsidianUri = config.obsidianVaultDir
             var savedToDailyNote = false
             val obsidianSaved: String? = if (obsidianUri.isNotBlank()) {
                 try {
-                    val today = SimpleDateFormat("yyyyMMdd", java.util.Locale.getDefault()).format(Date())
-                    val dailyName = "daily_$today.md"
+                    val todayYmd = SimpleDateFormat("yyyyMMdd", java.util.Locale.getDefault()).format(Date())
+                    val todayIso = SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()).format(Date())
+                    val dailyName = "daily_$todayYmd.md"
                     val dailyContent = config.readTextFromSafSubDir(obsidianUri, "01_Daily", dailyName)
-                    if (dailyContent != null) {
-                        val updated = injectIntoDailyNoteActionItems(dailyContent, baseName, summaryText)
+                    val memoLink = "[[$VOICE_MEMO_VAULT_DIR/$baseName]]"
+
+                    val todayOrNull = items.filter { it.date == null || it.date == todayIso }
+                    val otherDated = items.filter { it.date != null && it.date != todayIso }
+
+                    // 즉시 주입(당일 노트 존재) 시 자동화 대상은 otherDated 뿐, 아니면 전 항목
+                    val itemsForAutomation: List<MemoItem>
+                    if (dailyContent != null && todayOrNull.isNotEmpty()) {
+                        val updated = injectIntoDailyNoteActionItems(dailyContent, baseName, todayOrNull, memoLink)
                         val res = config.writeTextToSafSubDir(updated, obsidianUri, "01_Daily", dailyName)
                         savedToDailyNote = res != null
-                        Log.d(TAG, "VoiceMemo → 데일리 노트 Action Items 주입: $dailyName (success=$savedToDailyNote)")
-                        res
+                        itemsForAutomation = otherDated
+                        Log.d(TAG, "VoiceMemo → 오늘 데일리노트 주입 ${todayOrNull.size}건 (success=$savedToDailyNote)")
                     } else {
-                        Log.d(TAG, "당일 데일리 노트 없음 → 00_Inbox/voice_memos 저장")
-                        config.writeTextToSafSubDir(mdContent, obsidianUri, "00_Inbox/voice_memos", "${baseName}.md")
+                        itemsForAutomation = items
+                        Log.d(TAG, "당일 노트 없음 → 전 항목 자동화 라우팅 대상")
                     }
+
+                    // 메모 본문을 vault 06_Resources/음성메모/ 에 저장 (요약=전 항목, frontmatter=자동화 대상만)
+                    val vaultMd = buildMemoMd(items, itemsForAutomation)
+                    val res = config.writeTextToSafSubDir(vaultMd, obsidianUri, VOICE_MEMO_VAULT_DIR, "${baseName}.md")
+                    if (res != null || savedToDailyNote) "ok" else null
                 } catch (e: Exception) {
                     Log.e(TAG, "VoiceMemo Obsidian save failed", e); null
                 }
@@ -1619,7 +1661,7 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                 val memoId = pendingVoiceMemoId
                 if (memoId > 0L) {
                     // 기존 레코드 update (STT + 요약 + 파일경로 + 파일명 갱신)
-                    dao.updateSummary(memoId.toInt(), sttText, summaryText, summarySavedPath)
+                    dao.updateSummary(memoId.toInt(), sttText, summaryDisplay, summarySavedPath)
                     dao.updateFilePaths(memoId.toInt(), mp3Path, sttSavedPath, summarySavedPath)
                     dao.updateFileName(memoId.toInt(), "${baseName}.md")
                     Log.d(TAG, "VoiceMemo DB updated: id=$memoId → ${baseName}.md")
@@ -1632,7 +1674,7 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                         sttLocalPath = sttSavedPath,
                         summaryLocalPath = summarySavedPath,
                         sttText = sttText,
-                        summaryText = summaryText,
+                        summaryText = summaryDisplay,
                         fileSizeMb = (audioSaved ?: audioFile).length() / (1024.0 * 1024.0)
                     ))
                     Log.d(TAG, "VoiceMemo inserted into DB: ${baseName}.md")
@@ -1662,26 +1704,86 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * ★ v3.5: 데일리 노트의 `## ✅ Action Items` 섹션에 음성메모 요약을 주입한다.
-     * - 마커(`<!-- 🤖 from-mobile-voicememo | baseName -->`)로 멱등 보장 (재실행 시 중복 주입 안 함)
-     * - 섹션 헤더 바로 다음에 삽입 (Today Call/주식 브리핑 등 ### 하위 섹션보다 위, 눈에 잘 띄게)
-     * - Action Items 섹션이 없으면 문서 끝에 새로 만들어 추가
+     * ★ v3.7: 음성 메모 액션 아이템(날짜 + 할 일).
+     * date 는 절대 날짜(YYYY-MM-DD) 또는 null(날짜 없음).
      */
-    private fun injectIntoDailyNoteActionItems(content: String, baseName: String, summaryText: String): String {
-        val marker = "<!-- 🤖 from-mobile-voicememo | $baseName -->"
-        if (content.contains(marker)) return content  // 이미 주입됨
+    private data class MemoItem(val date: String?, val text: String)
 
-        val time = SimpleDateFormat("HH:mm", java.util.Locale.KOREAN).format(Date())
-        // 요약 본문은 각 줄을 4칸 들여써서 상위 불릿의 연속 내용으로 렌더링되게 함
-        val indentedSummary = summaryText.trim().lines().joinToString("\n") { "    ${it.trim()}" }
-        val block = "- 🎙️ 음성메모 $time $marker\n$indentedSummary"
+    /**
+     * ★ v3.7: 음성 메모 요약 AI 응답(JSON)을 파싱한다.
+     * 반환: Pair(summary, action_items). 파싱 실패 시 ("", emptyList()).
+     */
+    private fun parseVoiceMemoJson(raw: String): Pair<String, List<MemoItem>> {
+        return try {
+            // 코드펜스/잡텍스트 방어 — 첫 '{' ~ 마지막 '}' 만 추출
+            val s = raw.indexOf('{')
+            val e = raw.lastIndexOf('}')
+            if (s < 0 || e <= s) return Pair("", emptyList())
+            val obj = JSONObject(raw.substring(s, e + 1))
+            val summary = obj.optString("summary", "").trim()
+            val list = mutableListOf<MemoItem>()
+            val arr = obj.optJSONArray("action_items")
+            if (arr != null) {
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    val text = o.optString("text", "").trim()
+                    if (text.isEmpty()) continue
+                    var date: String? = o.optString("date", "").trim()
+                    // null/빈값/형식불일치는 날짜 없음 처리
+                    if (date.isNullOrEmpty() || date.equals("null", ignoreCase = true)
+                        || !Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(date)) {
+                        date = null
+                    }
+                    list.add(MemoItem(date, text))
+                }
+            }
+            Pair(summary, list)
+        } catch (ex: Exception) {
+            Log.w(TAG, "voice memo JSON parse failed: ${ex.message}")
+            Pair("", emptyList())
+        }
+    }
+
+    /** 사람이 읽는 요약/데일리노트 표시용 한 줄 렌더 */
+    private fun renderMemoItemLine(item: MemoItem): String =
+        if (item.date != null) "- 📅 ${item.date} — ${item.text}" else "- ${item.text}"
+
+    /** frontmatter action_items YAML 블록 생성 (text 는 따옴표·역슬래시 이스케이프) */
+    private fun yamlActionItems(items: List<MemoItem>): String {
+        if (items.isEmpty()) return "action_items: []"
+        val sb = StringBuilder("action_items:\n")
+        for (it in items) {
+            val d = if (it.date != null) "\"${it.date}\"" else "null"
+            val t = it.text.replace("\\", "\\\\").replace("\"", "\\\"")
+            sb.append("  - date: $d\n")
+            sb.append("    text: \"$t\"\n")
+        }
+        return sb.toString().trimEnd()
+    }
+
+    /**
+     * ★ v3.7.1: 데일리 노트의 `## ✅ Action Items` 섹션에 음성메모 액션 아이템(들)을 주입한다.
+     * - 형식: `- 🔜 음성메모 : {할 일} [[메모링크]]` (자동화 주입 형식과 통일)
+     * - 항목 단위 마커(`<!-- 🤖 from-mobile-voicememo | baseName#i -->`)로 멱등 보장
+     * - 섹션 헤더 바로 다음에 삽입. 섹션이 없으면 문서 끝에 새로 만들어 추가
+     */
+    private fun injectIntoDailyNoteActionItems(
+        content: String, baseName: String, items: List<MemoItem>, memoLink: String
+    ): String {
+        val blocks = mutableListOf<String>()
+        items.forEachIndexed { i, item ->
+            val marker = "<!-- 🤖 from-mobile-voicememo | $baseName#$i -->"
+            if (content.contains(marker)) return@forEachIndexed  // 이미 주입됨
+            blocks.add("- 🔜 음성메모 : ${item.text} $memoLink $marker")
+        }
+        if (blocks.isEmpty()) return content
 
         val lines = content.split("\n").toMutableList()
         val headerIdx = lines.indexOfFirst { it.trimStart().startsWith("## ") && it.contains("Action Items") }
         return if (headerIdx < 0) {
-            content.trimEnd() + "\n\n## ✅ Action Items\n" + block + "\n"
+            content.trimEnd() + "\n\n## ✅ Action Items\n" + blocks.joinToString("\n") + "\n"
         } else {
-            lines.add(headerIdx + 1, block)
+            lines.addAll(headerIdx + 1, blocks)
             lines.joinToString("\n")
         }
     }

@@ -1,8 +1,10 @@
-# CLAUDE.md — 회의녹음요약 모바일 앱 v3.6.0
+# CLAUDE.md — 회의녹음요약 모바일 앱 v3.7.1
 
-> v3.6.0 (2026-06-27): **음성 메모 완전 자동화** — 음성 메모 모드에서 녹음 정지만 누르면 메모 저장→STT→요약→Obsidian 저장까지 자동(별도 저장 버튼 불필요). 음성 메모 화면은 STT 변환 결과·회의록 요약 결과만 표시(파일선택·수동버튼·재요약 카드 등 부가기능 숨김). versionCode 12 / versionName 3.6.0
+> v3.7.1 (2026-06-28): **음성메모 액션 아이템에 메모 위키링크 부착** — 당일 즉시 주입/자동화 주입 모두 `- 🔜 음성메모 : {할 일} [[06_Resources/음성메모/…]]` 형식으로 통일. 메모 본문(.md)을 항상 vault `06_Resources/음성메모/`에 저장해 링크가 연결되게 함. frontmatter `action_items`엔 자동화 라우팅 대상만 남겨(즉시 주입분 제외) 중복 방지. versionCode 14 / versionName 3.7.1
 >
 > **이전 버전:**
+> - v3.7.0 (2026-06-28): **날짜 인식 음성메모 → 해당 날짜 Action Item 라우팅.** 음성메모 요약을 날짜 인식 JSON(`{summary, action_items:[{date,text}]}`)으로 출력. 녹음 시점(`{today}`) 기준으로 "다음주 화요일/7월 3일/7월 2일까지" 등을 절대 날짜(YYYY-MM-DD)로 해석. 앱은 `action_items` frontmatter 작성 + 오늘/무날짜 항목 즉시 주입, 그 외 날짜 항목은 자동화(`voice_memo_inject` v2.25)가 해당 날짜 데일리노트로 라우팅. 날짜 없는 메모는 기존 동작 유지. 기획서 `docs/기획서_날짜인식_음성메모_v3.7.md`
+> - v3.6.1 (2026-06-28): **Gemini STT 복구** — `gemini-2.5-flash` thinking 토큰이 전사 출력을 잠식해 빈 응답이 나오던 문제를 STT에서 `thinkingBudget=0`으로 차단. SSE 파싱을 8192바이트 청크→`readUtf8Line()` 라인 단위로 교체(JSON/한글 멀티바이트 쪼개짐 유실 방지) + `finishReason`(MAX_TOKENS 등) 노출. 회의록 템플릿 BottomSheet 하단 취소/요약실행 버튼 키움(높이 60dp·18sp). MP3/STT 파일 선택을 인앱 다이얼로그(최신 날짜순)로 교체 + ‘기기에서 찾기’ 폴백. versionCode 13 / versionName 3.6.1
 > - v3.5.1 (2026-06-19): 음성메모 요약 프롬프트(`SUMMARY_VOICE_MEMO`) 개선 — 군더더기 제거 후 핵심만 압축. 할 일·일정·수치는 반드시 포함
 > - v3.5.0 (2026-06-16): 녹음 엔진 AudioRecord+게인 교체(음량 증폭) + 음성메모 저장 위치 분기(데일리 노트 주입)
 > - v3.4.3 (2026-06-02): 전화통화 메모 Q&A 제거 + 화자 번호 병기 금지
@@ -11,6 +13,43 @@
 > - v3.4 (2026-05-24): 녹음 정지 즉시 회의목록 자동 등록 + 음성메모 파이프라인 완성
 > - PC 데스크톱 v3.0.8 동기화 (2026-05-12): 파일 저장명 포맷 `_YYYYMMDD_모드` (언더스코어)
 > - PC 데스크톱 v3.0.6 동기화 (2026-05-06): 전 양식 Q&A 규칙 통일, 컨퍼런스/간담회 양식
+
+## v3.7.1 주요 변경사항 (2026-06-28)
+
+**음성메모 액션 아이템에 메모 위키링크 부착 + 주입 형식 통일**
+
+- 데일리노트 주입 형식을 `- 🔜 음성메모 : {할 일} [[06_Resources/음성메모/음성메모_…]]` 로 통일 (당일 즉시 주입·자동화 주입 동일)
+- 배경: 당일 즉시 주입 경로는 메모 본문(.md)을 vault에 넣지 않아 위키링크를 걸 수 없었음
+- `RecordingViewModel.runVoiceMemo`: 메모 본문(.md)을 **항상 vault `06_Resources/음성메모/`** 에 저장 → 링크 연결. `## 요약`엔 전 항목, frontmatter `action_items`엔 자동화 라우팅 대상만(즉시 주입분 제외) → 자동화 중복 주입 방지
+- `injectIntoDailyNoteActionItems(content, baseName, items, memoLink)` — link 인자 추가, 항목 단위 멱등 마커 유지
+- 자동화 `voice_memo_inject` v2.25: frontmatter `action_items` 키가 있으면 **권위적**으로 사용(빈 리스트면 라우팅 없음, `## 요약` 폴백 안 함). 모바일이 전부 즉시 주입한 파일(`action_items: []`)은 synced·이동 처리
+- `VOICE_MEMO_VAULT_DIR = "06_Resources/음성메모"` 상수 추가. versionCode 13→14, versionName 3.6.1→3.7.1
+
+## v3.7.0 주요 변경사항 (2026-06-28)
+
+**날짜 인식 음성메모 → 해당 날짜 Today Action Item 자동 라우팅**
+
+- `GeminiService.SUMMARY_VOICE_MEMO`: 구조화 JSON 출력으로 교체 — `{"summary":...,"action_items":[{"date":"YYYY-MM-DD|null","text":...}]}`
+- 날짜 해석은 **녹음 시점**에 1회: `{today}`(요일 포함 기준 날짜)를 프롬프트에 제공 → "내일/다음주 화요일/7월 3일/7월 2일까지"를 절대 날짜로 변환. "~까지" 마감 작업은 마감일을 date로
+- `GeminiService`/`ClaudeService` `summarize()`에 `{today}` 치환 추가(두 엔진 공용 프롬프트)
+- `RecordingViewModel`: `parseVoiceMemoJson()`(JSON 파싱, 실패 시 date=null 단일 폴백), `MemoItem` 데이터클래스, `renderMemoItemLine()`, `yamlActionItems()` 추가
+- 라우팅: 오늘/무날짜 항목은 당일 노트 있으면 즉시 주입(기존 동작 유지), 그 외 날짜 항목은 자동화가 날짜대로 데일리노트(`get_or_create`)에 배치
+- 자동화 `voice_memo_inject.py`: `_extract_action_items`/`_parse_frontmatter`/`_normalize_date` 추가, 날짜별 그룹 주입. 명시 날짜는 morning/evening mode 무시
+- 기획서: `docs/기획서_날짜인식_음성메모_v3.7.md`
+
+## v3.6.1 주요 변경사항 (2026-06-28)
+
+**1. Gemini STT 복구 (`GeminiService.kt`)**
+- `transcribe()`에서 `thinkingBudget=0` — `gemini-2.5-flash` thinking 토큰이 전사 출력(maxOutputTokens)을 잠식해 빈/잘린 응답이 나오던 문제 차단
+- SSE 파싱을 8192바이트 청크 즉시 `readUtf8()` → `readUtf8Line()` 라인 단위로 교체 (JSON 1건·한글 멀티바이트가 읽기 경계에서 쪼개져 유실되던 버그 수정)
+- 빈 응답 시 `finishReason`(MAX_TOKENS/SAFETY 등) 사용자 노출
+
+**2. UI**
+- 회의록 템플릿 BottomSheet(`SummaryModeBottomSheet`) 하단 취소/요약 실행 버튼 키움(높이 60dp·18sp)
+- MP3/STT 파일 선택을 시스템 선택기 → **인앱 다이얼로그(최신 날짜순)** 로 교체. `LocalFilePickerDialog`(이름·수정일시·크기 표시) + ‘기기에서 찾기’ 시스템 선택기 폴백. `RecordingViewModel.listLocalAudioFiles()`/`listLocalSttFiles()`
+- 배경: `ActivityResultContracts.GetContent()` 시스템 선택기는 정렬 순서를 앱에서 제어 불가 → 인앱 목록으로 최신순 보장
+
+versionCode 12→13, versionName 3.6.0→3.6.1
 
 ## v3.6.0 주요 변경사항 (2026-06-27)
 
