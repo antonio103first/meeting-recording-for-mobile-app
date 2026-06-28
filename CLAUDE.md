@@ -1,6 +1,6 @@
 # CLAUDE.md — 회의녹음요약 모바일 앱 v3.7.1
 
-> v3.7.1 (2026-06-28): **음성메모 액션 아이템에 메모 위키링크 부착** — 당일 즉시 주입/자동화 주입 모두 `- 🔜 음성메모 : {할 일} [[06_Resources/음성메모/…]]` 형식으로 통일. 메모 본문(.md)을 항상 vault `06_Resources/음성메모/`에 저장해 링크가 연결되게 함. frontmatter `action_items`엔 자동화 라우팅 대상만 남겨(즉시 주입분 제외) 중복 방지. versionCode 14 / versionName 3.7.1
+> v3.7.1 (2026-06-28): **음성메모 액션 아이템에 메모 위키링크 부착** — 당일 즉시 주입/자동화 주입 모두 `- 🔜 음성메모 : {할 일} [[06_Resources/음성메모/…]]` 형식으로 통일. 메모 본문(.md)을 항상 vault `06_Resources/음성메모/`에 저장해 링크가 연결되게 함. frontmatter `action_items`엔 자동화 라우팅 대상만 남겨(즉시 주입분 제외) 중복 방지. versionCode 15 / versionName 3.7.1
 >
 > **이전 버전:**
 > - v3.7.0 (2026-06-28): **날짜 인식 음성메모 → 해당 날짜 Action Item 라우팅.** 음성메모 요약을 날짜 인식 JSON(`{summary, action_items:[{date,text}]}`)으로 출력. 녹음 시점(`{today}`) 기준으로 "다음주 화요일/7월 3일/7월 2일까지" 등을 절대 날짜(YYYY-MM-DD)로 해석. 앱은 `action_items` frontmatter 작성 + 오늘/무날짜 항목 즉시 주입, 그 외 날짜 항목은 자동화(`voice_memo_inject` v2.25)가 해당 날짜 데일리노트로 라우팅. 날짜 없는 메모는 기존 동작 유지. 기획서 `docs/기획서_날짜인식_음성메모_v3.7.md`
@@ -23,7 +23,7 @@
 - `RecordingViewModel.runVoiceMemo`: 메모 본문(.md)을 **항상 vault `06_Resources/음성메모/`** 에 저장 → 링크 연결. `## 요약`엔 전 항목, frontmatter `action_items`엔 자동화 라우팅 대상만(즉시 주입분 제외) → 자동화 중복 주입 방지
 - `injectIntoDailyNoteActionItems(content, baseName, items, memoLink)` — link 인자 추가, 항목 단위 멱등 마커 유지
 - 자동화 `voice_memo_inject` v2.25: frontmatter `action_items` 키가 있으면 **권위적**으로 사용(빈 리스트면 라우팅 없음, `## 요약` 폴백 안 함). 모바일이 전부 즉시 주입한 파일(`action_items: []`)은 synced·이동 처리
-- `VOICE_MEMO_VAULT_DIR = "06_Resources/음성메모"` 상수 추가. versionCode 13→14, versionName 3.6.1→3.7.1
+- `VOICE_MEMO_VAULT_DIR = "06_Resources/음성메모"` 상수 추가. versionCode 14→15, versionName 3.7.0→3.7.1
 
 ## v3.7.0 주요 변경사항 (2026-06-28)
 
