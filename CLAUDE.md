@@ -1,5 +1,7 @@
-# CLAUDE.md — 회의녹음요약 모바일 앱 v3.7.6
+# CLAUDE.md — 회의녹음요약 모바일 앱 v3.7.7
 
+> v3.7.7 (2026-06-28): 요약방식 시트 하단 취소/요약실행 버튼 높이 88dp → 60dp(적당). versionCode 21 / versionName 3.7.7
+>
 > v3.7.6 (2026-06-28): **요약방식 시트 레이아웃 + 저장 실패 경고**. ① `SummaryModeBottomSheet`: 양식 목록(8개)만 스크롤(weight+verticalScroll)하고 취소/요약실행 버튼을 스크롤 밖 하단에 고정·높이 88dp → 항목이 많아도 버튼이 잘리지 않음(글씨 15sp). ② 지정폴더/Obsidian SAF 권한 만료 시 저장이 조용히 실패하던 것을 `confirmFileName` 상태에 "⚠️ 권한 만료 — 폴더 재선택" 경고로 노출. versionCode 20 / versionName 3.7.6
 >
 > **이전 버전 (이번 세션 STT/UI 작업):**

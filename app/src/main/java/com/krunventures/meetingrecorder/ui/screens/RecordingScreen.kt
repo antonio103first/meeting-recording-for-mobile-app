@@ -1520,21 +1520,21 @@ private fun SummaryModeBottomSheet(
 
             Spacer(Modifier.height(16.dp))
 
-            // ★ v3.7.6: 하단 취소/요약 실행 — 항상 풀높이로 보이게(스크롤 밖에 고정). 버튼 크게(88dp), 글씨 작게(15sp)
+            // ★ v3.7.7: 하단 취소/요약 실행 — 스크롤 밖 고정 + 적당한 높이(60dp), 글씨 15sp
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 OutlinedButton(
                     onClick = onDismiss,
-                    modifier = Modifier.weight(1f).height(88.dp),
-                    shape = RoundedCornerShape(18.dp)
+                    modifier = Modifier.weight(1f).height(60.dp),
+                    shape = RoundedCornerShape(16.dp)
                 ) {
                     Text("취소", fontSize = 15.sp, fontWeight = FontWeight.Medium)
                 }
                 Button(
                     onClick = { onSelect(selectedMode) },
-                    modifier = Modifier.weight(2f).height(88.dp),
+                    modifier = Modifier.weight(2f).height(60.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.primary
                     ),
