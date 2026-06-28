@@ -1127,20 +1127,78 @@ class GeminiService {
         if (apiKey.isBlank()) return ServiceResult(false, "Gemini API 키가 없습니다. 설정에서 입력해주세요.")
         if (!audioFile.exists()) return ServiceResult(false, "파일을 찾을 수 없습니다: ${audioFile.name}")
 
+        onProgress?.invoke(3)
+        onStatus?.invoke("STT 변환 준비 중...")
+
+        // ★ v3.7.2: 긴 오디오를 10분 청크로 분할 — 한 구간의 반복 루프가 전체 전사를 망치지 않도록.
+        //   (35분 회의가 '네. 네.' 루프로 99.5% 손실되던 문제 대응)
+        val workDir = File(audioFile.parentFile ?: audioFile, "_sttchunks")
+        val chunks = AudioChunker.splitByDuration(audioFile, workDir, chunkSec = 600)
+        val isChunked = chunks.size > 1
+        Log.d("GeminiService", "STT 청크 수: ${chunks.size} (chunked=$isChunked)")
+
+        val full = StringBuilder()
+        val failedChunks = mutableListOf<String>()
+        try {
+            for ((idx, chunk) in chunks.withIndex()) {
+                // ★ v3.7.3: 구간별 재시도 + backoff — 무료 한도(429)·일시 네트워크 오류로 중간 구간이
+                //   실패하던 문제 대응. 최대 3회, 2s·5s 대기. 구간 간에도 짧게 대기해 RPM 버스트 회피.
+                var r = GeminiService.ServiceResult(false, "")
+                val maxTry = 3
+                for (attempt in 1..maxTry) {
+                    onStatus?.invoke(
+                        if (isChunked) "Gemini STT 변환 중... (${idx + 1}/${chunks.size} 구간${if (attempt > 1) " · 재시도 ${attempt - 1}" else ""})"
+                        else "Gemini STT 변환 중... (1~10분 소요)"
+                    )
+                    r = transcribeOne(chunk, apiKey, numSpeakers)
+                    if (r.success) break
+                    Log.w("GeminiService", "구간 ${idx + 1} 시도 $attempt 실패: ${r.text.take(160)}")
+                    if (attempt < maxTry) {
+                        try { Thread.sleep(if (attempt == 1) 2000L else 5000L) } catch (_: InterruptedException) {}
+                    }
+                }
+                if (!r.success) {
+                    if (!isChunked) return r  // 단일 파일이면 실패 그대로 반환
+                    val reason = r.text.replace("\n", " ").take(60)
+                    failedChunks.add("구간 ${idx + 1}: $reason")
+                    full.append("\n[구간 ${idx + 1} 전사 실패: $reason]\n")
+                } else {
+                    // 혹시 남은 반복 루프 구간 제거 후 합침
+                    full.append(stripRunawayRepetition(r.text).trim()).append("\n")
+                }
+                onProgress?.invoke((idx + 1) * 95 / chunks.size)
+                // 구간 간 짧은 대기(마지막 제외) — 무료 한도 RPM 버스트 회피
+                if (idx < chunks.size - 1) {
+                    try { Thread.sleep(1500L) } catch (_: InterruptedException) {}
+                }
+            }
+        } finally {
+            if (isChunked) {
+                chunks.forEach { runCatching { it.delete() } }
+                runCatching { workDir.delete() }
+            }
+        }
+        if (failedChunks.isNotEmpty()) {
+            Log.w("GeminiService", "STT 일부 구간 실패(${failedChunks.size}): ${failedChunks.joinToString(" / ")}")
+        }
+
+        val text = full.toString().trim()
+        if (text.isBlank()) return ServiceResult(false, "Gemini STT 결과가 비어 있습니다.")
+        onProgress?.invoke(100)
+        onStatus?.invoke("Gemini STT 변환 완료")
+        return ServiceResult(true, text)
+    }
+
+    /** 단일(청크) 오디오 1개를 전사. 반복 루프 감지 시 높은 temperature 로 1회 재시도. */
+    private fun transcribeOne(audioFile: File, apiKey: String, numSpeakers: Int): ServiceResult {
         val sizeMb = audioFile.length() / (1024.0 * 1024.0)
         if (sizeMb > 50) {
-            return ServiceResult(false, "파일 크기(${String.format("%.1f", sizeMb)}MB)가 Gemini STT 최대 50MB를 초과합니다.\nCLOVA Speech(최대 200MB)를 사용해주세요.")
+            return ServiceResult(false, "구간 크기(${String.format("%.1f", sizeMb)}MB)가 50MB를 초과합니다.\nCLOVA Speech를 사용해주세요.")
         }
-        val sttPrompt = makeSttPrompt(numSpeakers)
-
-        onProgress?.invoke(5)
-        onStatus?.invoke("STT 변환 준비 중... (${String.format("%.1f", sizeMb)}MB)")
-
-        // 오디오 파일을 Base64로 인코딩
         val audioBytes = try {
             audioFile.readBytes()
         } catch (e: OutOfMemoryError) {
-            return ServiceResult(false, "메모리 부족: 파일이 너무 큽니다(${String.format("%.1f", sizeMb)}MB).\nCLOVA Speech를 사용해주세요.")
+            return ServiceResult(false, "메모리 부족(${String.format("%.1f", sizeMb)}MB).\nCLOVA Speech를 사용해주세요.")
         }
         val audioBase64 = Base64.encodeToString(audioBytes, Base64.NO_WRAP)
         val mimeType = when (audioFile.extension.lowercase()) {
@@ -1151,18 +1209,11 @@ class GeminiService {
             "flac" -> "audio/flac"
             else -> "audio/mp4"
         }
-
-        onStatus?.invoke("Gemini STT 변환 중... (1~10분 소요)")
-        onProgress?.invoke(30)
-
-        // 오디오 + 텍스트 프롬프트 구성
-        val contents = JsonArray().apply {
+        fun build(prompt: String) = JsonArray().apply {
             add(JsonObject().apply {
                 addProperty("role", "user")
                 add("parts", JsonArray().apply {
-                    add(JsonObject().apply {
-                        addProperty("text", sttPrompt)
-                    })
+                    add(JsonObject().apply { addProperty("text", prompt) })
                     add(JsonObject().apply {
                         add("inline_data", JsonObject().apply {
                             addProperty("mime_type", mimeType)
@@ -1173,17 +1224,17 @@ class GeminiService {
             })
         }
 
-        onProgress?.invoke(40)
+        // ★ v3.7.4: 화자 태그 없는 줄글 프롬프트 + temperature 0.4 — 실측으로 반복 루프 없이 정상 전사 확인
+        var result = callGeminiApi(activeModel, apiKey, build(makeSttPrompt(numSpeakers)),
+            temperature = 0.4f, thinkingBudget = 0)
 
-        // ★ v3.6.1: STT는 thinking 비활성화(thinkingBudget=0) — thinking 토큰이 전사 출력을
-        // 잠식해 응답이 비거나 잘리던 문제 방지. 전체 출력 토큰을 전사 결과에 사용.
-        val result = callGeminiApi(activeModel, apiKey, contents, temperature = 0.1f, thinkingBudget = 0)
-
-        if (result.success) {
-            onProgress?.invoke(100)
-            onStatus?.invoke("Gemini STT 변환 완료")
+        // 만약 그래도 반복 루프가 감지되면 더 높은 temperature + 강한 반복 금지로 1회 재시도
+        if (result.success && looksDegenerate(result.text)) {
+            Log.w("GeminiService", "STT 반복 루프 감지 — 재시도(temp=0.9)")
+            val retry = callGeminiApi(activeModel, apiKey, build(makeSttPrompt(numSpeakers, strict = true)),
+                temperature = 0.9f, thinkingBudget = 0)
+            result = if (retry.success && !looksDegenerate(retry.text)) retry else result
         }
-
         return result
     }
 
@@ -1252,21 +1303,57 @@ ${summaryText.take(100000)}
 
     // ── 유틸리티 ────────────────────────────────────────────────
 
-    private fun makeSttPrompt(numSpeakers: Int): String {
-        // ★ v3.2: numSpeakers는 참고값으로만 사용. AI가 오디오를 듣고 화자 수를 자동 판단 + 실명 자동 추정
-        return """이 오디오 파일을 한국어 텍스트로 정확히 전사해주세요.
+    private fun makeSttPrompt(numSpeakers: Int, strict: Boolean = false): String {
+        // ★ v3.7.4: '화자 태그 금지' 줄글 전사 — 핵심 변경.
+        //   [화자1] 네. [화자2] 네. 처럼 번호 태그가 번갈아 붙는 구조가 반복 루프(degeneration)의
+        //   '뼈대'가 되어, 맞장구가 많은 회의에서 모델이 '네.'를 수만 번 반복해 전사 전체가 손실됐음
+        //   (35분 회의 99.5% 손실). 실측: 화자 태그를 빼면 같은 오디오가 루프 없이 정상 전사됨.
+        //   화자 구분은 요약 단계가 이름·호칭·문맥으로 다시 추론하므로 STT 단계 태그는 불필요.
+        val base = """이 오디오 파일을 한국어로 정확히 전사해주세요.
 
 규칙:
-- 화자 수를 자동으로 판단하세요. 목소리 톤, 말투, 발언 전환 패턴을 분석하여 화자를 구분합니다.
-- 화자가 1명이면 화자 구분 없이 전사
-- 화자가 2명 이상이면 아래 우선순위로 화자를 표기:
-  1순위: 대화 중 자기소개, 호칭("김대표님", "과장님"), 이름 직접 언급 등에서 실명·직책을 파악하여 [홍길동 대표], [김과장] 등으로 표기
-  2순위: 실명 파악 불가 시 [화자1], [화자2], [화자3] ... 형식으로 구분
-- 실명이 확인된 경우 '[홍길동 대표]'처럼 실명만 사용. '[홍길동 대표 (화자1)]' 등 실명과 화자 번호를 혼합 표기하지 않는다
-- 화자 전환이 불명확한 구간은 직전 화자로 유지
-- 불명확한 부분은 [불명확] 표시
-- 의미 없는 짧은 반복(어, 음 등)은 생략
-- 전사 결과만 출력하고 설명 없이 바로 시작"""
+- 자연스러운 줄글(문단)로 전사한다. 발언이 바뀌면 줄을 바꿔도 된다.
+- ★ [화자1], [화자2] 같은 화자 번호 태그를 절대 사용하지 않는다. 이름·직책이 분명히 들리면 문장 안에 자연스럽게 녹여 적되(예: "김대표가 ~라고 말함" 또는 이름 호명), 태그 형식으로 매 발언 앞에 붙이지 않는다.
+- ★ 맞장구·추임새("네","예","응","어","음","아","그쵸","맞아요","그렇죠")는 전사하지 않고 생략한다. 의미 있는 발화만 적는다.
+- ★ 같은 단어나 문장을 절대 반복해서 출력하지 않는다. 같은 말이 여러 번 들려도 한 번만 적고 바로 다음 내용으로 넘어간다.
+- 들리지 않거나 불명확한 구간은 건너뛰고 다음 의미 있는 발화로 진행한다.
+- 전사 결과만 출력하고 설명 없이 바로 시작한다."""
+        return if (strict) base +
+            "\n- (매우 중요) 직전과 동일한 문장·단어를 반복하지 말 것. 같은 표현이 연속으로 나오려 하면 멈추고 다음 내용으로 넘어간다."
+        else base
+    }
+
+    /** ★ v3.7.2: STT 결과가 반복 루프(degeneration)인지 판정 — 같은 토큰 20회 연속 또는 고유토큰 비율 극히 낮음 */
+    private fun looksDegenerate(text: String): Boolean {
+        val tokens = text.split(Regex("\\s+"))
+            .filter { it.isNotBlank() && !it.matches(Regex("\\[.*\\]")) }
+        if (tokens.size < 40) return false
+        var maxRun = 1; var run = 1
+        for (i in 1 until tokens.size) {
+            if (tokens[i] == tokens[i - 1]) { run++; if (run > maxRun) maxRun = run } else run = 1
+        }
+        val uniqueRatio = tokens.toSet().size.toDouble() / tokens.size
+        return maxRun >= 20 || uniqueRatio < 0.06
+    }
+
+    /** ★ v3.7.2: 반복 루프 구간 절단 — 화자 태그 무시, 동일 내용 토큰이 20회 연속이면 그 지점부터 잘라냄 */
+    private fun stripRunawayRepetition(text: String): String {
+        val toks = text.split(Regex("\\s+")).filter { it.isNotEmpty() }
+        var prev: String? = null
+        var run = 0
+        var firstIdxOfRun = -1
+        var cutAt = -1
+        for (idx in toks.indices) {
+            val t = toks[idx]
+            if (t.matches(Regex("\\[.*\\]"))) continue  // 화자 태그는 카운트 제외
+            if (t == prev) {
+                run++
+                if (run >= 20) { cutAt = firstIdxOfRun; break }
+            } else { prev = t; run = 1; firstIdxOfRun = idx }
+        }
+        if (cutAt < 0) return text
+        val kept = toks.subList(0, cutAt).joinToString(" ").trim()
+        return (kept + " (이하 반복 구간 자동 생략)").trim()
     }
 
     private fun getTemplate(mode: String): String = when (mode) {

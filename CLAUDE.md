@@ -1,8 +1,15 @@
-# CLAUDE.md — 회의녹음요약 모바일 앱 v3.7.1
+# CLAUDE.md — 회의녹음요약 모바일 앱 v3.7.6
 
-> v3.7.1 (2026-06-28): **음성메모 액션 아이템에 메모 위키링크 부착** — 당일 즉시 주입/자동화 주입 모두 `- 🔜 음성메모 : {할 일} [[06_Resources/음성메모/…]]` 형식으로 통일. 메모 본문(.md)을 항상 vault `06_Resources/음성메모/`에 저장해 링크가 연결되게 함. frontmatter `action_items`엔 자동화 라우팅 대상만 남겨(즉시 주입분 제외) 중복 방지. versionCode 15 / versionName 3.7.1
+> v3.7.6 (2026-06-28): **요약방식 시트 레이아웃 + 저장 실패 경고**. ① `SummaryModeBottomSheet`: 양식 목록(8개)만 스크롤(weight+verticalScroll)하고 취소/요약실행 버튼을 스크롤 밖 하단에 고정·높이 88dp → 항목이 많아도 버튼이 잘리지 않음(글씨 15sp). ② 지정폴더/Obsidian SAF 권한 만료 시 저장이 조용히 실패하던 것을 `confirmFileName` 상태에 "⚠️ 권한 만료 — 폴더 재선택" 경고로 노출. versionCode 20 / versionName 3.7.6
+>
+> **이전 버전 (이번 세션 STT/UI 작업):**
+> - v3.7.5 (2026-06-28): 요약실행/취소 버튼 글씨↓(15sp)·디자인↑. 저장 실패 경고 추가
+> - v3.7.4 (2026-06-28): **Gemini STT 반복루프 근본 해결** — `[화자1] 네. [화자2] 네.` 화자 태그 교대 구조가 루프의 뼈대였음. STT 프롬프트를 **화자 태그 없는 줄글 전사**로 변경(맞장구 생략, 반복 금지), temperature 0.4. 실측으로 동일 오디오가 루프 없이 정상 전사 확인. 화자 구분은 요약 단계가 이름·문맥으로 재추론
+> - v3.7.3 (2026-06-28): STT 구간별 재시도+backoff(429/일시오류), 실패 시 실제 원인 인라인 표시
+> - v3.7.2 (2026-06-28): STT 오디오 10분 청크 분할(`AudioChunker`, MediaExtractor/MediaMuxer remux) + 반복루프 감지·트리밍. 요약실행 버튼 확대
 >
 > **이전 버전:**
+> - v3.7.1 (2026-06-28): 음성메모 액션 아이템에 메모 위키링크 부착, vault `06_Resources/음성메모/` 저장, frontmatter `action_items` 라우팅 대상만
 > - v3.7.0 (2026-06-28): **날짜 인식 음성메모 → 해당 날짜 Action Item 라우팅.** 음성메모 요약을 날짜 인식 JSON(`{summary, action_items:[{date,text}]}`)으로 출력. 녹음 시점(`{today}`) 기준으로 "다음주 화요일/7월 3일/7월 2일까지" 등을 절대 날짜(YYYY-MM-DD)로 해석. 앱은 `action_items` frontmatter 작성 + 오늘/무날짜 항목 즉시 주입, 그 외 날짜 항목은 자동화(`voice_memo_inject` v2.25)가 해당 날짜 데일리노트로 라우팅. 날짜 없는 메모는 기존 동작 유지. 기획서 `docs/기획서_날짜인식_음성메모_v3.7.md`
 > - v3.6.1 (2026-06-28): **Gemini STT 복구** — `gemini-2.5-flash` thinking 토큰이 전사 출력을 잠식해 빈 응답이 나오던 문제를 STT에서 `thinkingBudget=0`으로 차단. SSE 파싱을 8192바이트 청크→`readUtf8Line()` 라인 단위로 교체(JSON/한글 멀티바이트 쪼개짐 유실 방지) + `finishReason`(MAX_TOKENS 등) 노출. 회의록 템플릿 BottomSheet 하단 취소/요약실행 버튼 키움(높이 60dp·18sp). MP3/STT 파일 선택을 인앱 다이얼로그(최신 날짜순)로 교체 + ‘기기에서 찾기’ 폴백. versionCode 13 / versionName 3.6.1
 > - v3.5.1 (2026-06-19): 음성메모 요약 프롬프트(`SUMMARY_VOICE_MEMO`) 개선 — 군더더기 제거 후 핵심만 압축. 할 일·일정·수치는 반드시 포함

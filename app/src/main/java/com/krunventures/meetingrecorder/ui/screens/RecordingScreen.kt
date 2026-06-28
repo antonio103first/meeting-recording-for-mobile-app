@@ -1424,6 +1424,7 @@ private fun SummaryModeBottomSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .fillMaxHeight(0.92f)   // ★ v3.7.6: 시트 높이 고정 → 옵션은 스크롤, 하단 버튼은 항상 풀높이로 보이게
                 .padding(horizontal = 24.dp, vertical = 16.dp)
         ) {
             Text(
@@ -1460,6 +1461,13 @@ private fun SummaryModeBottomSheet(
                     "다수 발표자 행사·세미나·라운드테이블\n발표자별 핵심 메시지·인용·Q&A (Q/A 붙여 쓰기)")
             )
 
+            // ★ v3.7.6: 옵션 목록만 스크롤(weight) → 하단 버튼 영역을 밀어내지 않음
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+            ) {
             modes.forEach { (value, label, description) ->
                 val isSelected = selectedMode == value
                 Surface(
@@ -1508,30 +1516,33 @@ private fun SummaryModeBottomSheet(
                     }
                 }
             }
+            }  // ★ v3.7.6: end 스크롤 옵션 영역
 
-            Spacer(Modifier.height(20.dp))
+            Spacer(Modifier.height(16.dp))
 
-            // ★ v3.6.1: 하단 취소/요약 실행 버튼 키움 (높이 60dp·글자 18sp) — 터치 영역 확대
+            // ★ v3.7.6: 하단 취소/요약 실행 — 항상 풀높이로 보이게(스크롤 밖에 고정). 버튼 크게(88dp), 글씨 작게(15sp)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 OutlinedButton(
                     onClick = onDismiss,
-                    modifier = Modifier.weight(1f).height(60.dp),
-                    shape = RoundedCornerShape(14.dp)
+                    modifier = Modifier.weight(1f).height(88.dp),
+                    shape = RoundedCornerShape(18.dp)
                 ) {
-                    Text("취소", fontSize = 18.sp)
+                    Text("취소", fontSize = 15.sp, fontWeight = FontWeight.Medium)
                 }
                 Button(
                     onClick = { onSelect(selectedMode) },
-                    modifier = Modifier.weight(1f).height(60.dp),
+                    modifier = Modifier.weight(2f).height(88.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.primary
                     ),
-                    shape = RoundedCornerShape(14.dp)
+                    shape = RoundedCornerShape(18.dp)
                 ) {
-                    Text("요약 실행", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    Icon(Icons.Filled.PlayArrow, null, modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("요약 실행", fontSize = 15.sp, fontWeight = FontWeight.Bold)
                 }
             }
 

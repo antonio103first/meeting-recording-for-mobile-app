@@ -949,8 +949,14 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                     Log.d(TAG, "SAF direct save results: ${safResults.joinToString()}")
                 }
 
-                // ★ v3.0.7: Obsidian 미설정 경고 (Obsidian 폴더가 비어있는 경우)
-                val noObsidianW = if (obsidianUri.isBlank()) "\n⚠️ Obsidian 미연결 — 설정에서 vault 폴더를 지정하세요" else ""
+                // ★ v3.7.5: 저장 경고 — 미설정 + 권한 만료(실패)를 모두 노출 (silent 실패 방지)
+                //   지정폴더/Obsidian SAF 권한이 재설치 등으로 만료되면 write가 조용히 실패하므로 명확히 경고
+                val noObsidianW = buildString {
+                    if (obsidianUri.isBlank()) append("\n⚠️ Obsidian 미연결 — 설정에서 vault 폴더를 지정하세요")
+                    else if (!obsidianSaved) append("\n⚠️ Obsidian 저장 실패 — 폴더 권한 만료. 설정에서 vault 폴더를 다시 선택하세요")
+                    if (summarySafUri.isNotBlank() && !summarySafSaved)
+                        append("\n⚠️ 지정폴더 저장 실패 — 폴더 권한 만료. 설정에서 저장 폴더를 다시 선택하세요")
+                }
 
                 // Step 7: Google Drive 자동 업로드 (STT + 회의록 파일 — 녹음파일은 stopRecording에서 이미 업로드)
                 if (config.driveAutoUpload) {
