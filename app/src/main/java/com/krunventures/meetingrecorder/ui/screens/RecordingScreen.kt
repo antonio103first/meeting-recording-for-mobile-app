@@ -118,13 +118,22 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
 
     // Error dialog
     state.error?.let { error ->
+        val canResume = state.voiceMemoResumeFile.isNotBlank()
         AlertDialog(
             onDismissRequest = { viewModel.clearError() },
-            title = { Text("오류") },
+            title = { Text(if (canResume) "처리 중단됨" else "오류") },
             text = { Text(error) },
             confirmButton = {
-                TextButton(onClick = { viewModel.clearError() }) { Text("확인") }
-            }
+                if (canResume) {
+                    // ★ v3.7.9: 음성메모 파이프라인 실패 시 같은 녹음으로 즉시 이어서 재시도
+                    TextButton(onClick = { viewModel.resumeVoiceMemo() }) { Text("🔁 다시 시도") }
+                } else {
+                    TextButton(onClick = { viewModel.clearError() }) { Text("확인") }
+                }
+            },
+            dismissButton = if (canResume) {
+                { TextButton(onClick = { viewModel.clearError() }) { Text("닫기") } }
+            } else null
         )
     }
 
@@ -506,6 +515,27 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
                                 Spacer(Modifier.width(8.dp))
                                 Text("자동 처리 중...", fontSize = 14.sp,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        } else if (state.voiceMemoResumeFile.isNotBlank()) {
+                            // ★ v3.7.9: STT/요약 실패로 중단됨 — 같은 녹음으로 이어서 재처리하는 진입점(다이얼로그를 닫아도 유지)
+                            Column(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+                                Text(
+                                    "⚠️ 처리가 중단되었습니다. 녹음은 안전하게 저장되어 있습니다.",
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                                Spacer(Modifier.height(6.dp))
+                                Button(
+                                    onClick = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        viewModel.resumeVoiceMemo()
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                                    shape = RoundedCornerShape(14.dp)
+                                ) {
+                                    Text("🔁 STT·요약 다시 시도", fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                                }
                             }
                         } else {
                             Text(

@@ -56,7 +56,10 @@ data class RecordingUiState(
     val resummarizeProgress: Int = 0,  // progress for resummarize
     val resummarizeStatus: String = "",  // status for resummarize
     val safNotConfigured: Boolean = false,  // SAF 저장 폴더 미설정 경고
-    val recordingMode: RecordingMode = RecordingMode.MEETING
+    val recordingMode: RecordingMode = RecordingMode.MEETING,
+    // ★ v3.7.9: 음성메모 파이프라인(STT/요약)이 실패해 중단됐을 때, 같은 녹음으로 이어서 재처리할 수 있는
+    //   오디오 파일 경로. 비어 있지 않으면 UI에 "🔁 다시 시도" 진입점을 노출한다.
+    val voiceMemoResumeFile: String = ""
 )
 
 class RecordingViewModel(app: Application) : AndroidViewModel(app) {
@@ -111,6 +114,10 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
     private var savedRecordingFile: File? = null
     // 음성메모 — 녹음 정지 즉시 DB에 삽입된 레코드 ID (STT 완료 후 update에 사용)
     private var pendingVoiceMemoId: Long = -1L
+    // ★ v3.7.9: 음성메모 재처리(resume) 컨텍스트 — STT/요약 실패로 중단 시 같은 녹음으로 이어서 재시도.
+    //   resumableVoiceMemoStt 가 채워져 있으면 STT 재변환 없이 요약 단계부터 재개한다.
+    private var resumableVoiceMemoAudio: File? = null
+    private var resumableVoiceMemoStt: String? = null
     // 회의녹음 — 녹음 정지 즉시 DB에 삽입된 레코드 ID (confirmFileName 후 update에 사용)
     private var pendingMeetingId: Long = -1L
     // V2.0: 재요약 기능 — 로드된 STT 파일
@@ -1514,17 +1521,44 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
      * 3) 요약(2~3문장) → 메모녹음_YYYYMMDD.md (summarySaveDir + SAF + Obsidian)
      * 파일명 다이얼로그 없음 — 자동 저장
      */
-    private suspend fun runVoiceMemo(audioFile: File) {
+    private suspend fun runVoiceMemo(audioFile: File, presetStt: String? = null) {
         try {
             // Step 1: STT
-            updateUiState { it.copy(sttStatus = "STT 변환 중...") }
-            val sttResult = runStt(audioFile)
-            if (!sttResult.first) {
-                updateUiState { it.copy(isProcessing = false, error = "STT 실패:\n${sttResult.second}") }
-                return
+            // ★ v3.7.9: presetStt 가 있으면(요약 단계 실패 후 재개) STT를 재변환하지 않고 재사용한다.
+            val sttText: String
+            if (!presetStt.isNullOrBlank()) {
+                sttText = presetStt
+                updateUiState { it.copy(sttText = sttText, sttStatus = "STT 재사용(이전 변환 결과)") }
+            } else {
+                // ★ v3.7.9: 일시적 오류(네트워크/429/타임아웃)로 전체 파이프라인이 죽지 않도록 STT를 재시도.
+                //   (Gemini는 내부 청크 재시도가 있으나, 최상위 하드 실패는 여기서 한 번 더 흡수)
+                var sttText0 = ""
+                var sttErr = ""
+                var sttOk = false
+                val maxTry = 3
+                for (attempt in 1..maxTry) {
+                    updateUiState { it.copy(sttStatus = if (attempt == 1) "STT 변환 중..." else "STT 재시도 ($attempt/$maxTry)...") }
+                    if (attempt > 1) kotlinx.coroutines.delay(if (attempt == 2) 2000L else 5000L)
+                    val r = runStt(audioFile)
+                    if (r.first && r.second.isNotBlank()) { sttOk = true; sttText0 = r.second; break }
+                    sttErr = r.second
+                    Log.w(TAG, "VoiceMemo STT 시도 $attempt/$maxTry 실패: ${sttErr.take(160)}")
+                }
+                if (!sttOk) {
+                    // 하드 실패 — 녹음(m4a)·목록 등록은 이미 완료된 상태이므로 데이터 손실 없음.
+                    //   같은 녹음으로 즉시 이어서 재시도할 수 있도록 resume 컨텍스트를 남기고 깔끔히 중단.
+                    resumableVoiceMemoAudio = audioFile
+                    resumableVoiceMemoStt = null
+                    updateUiState { it.copy(
+                        isProcessing = false,
+                        voiceMemoResumeFile = audioFile.absolutePath,
+                        error = "STT 변환에 실패했습니다.\n(녹음 파일은 안전하게 저장되었고 회의 목록에 등록되어 있음)\n\n$sttErr\n\n👉 네트워크·API 키를 확인한 뒤 '🔁 STT부터 다시 시도'를 누르면 이 녹음으로 이어서 진행합니다."
+                    ) }
+                    return
+                }
+                sttText = sttText0
+                updateUiState { it.copy(sttText = sttText, sttStatus = "STT 완료") }
             }
-            val sttText = sttResult.second
-            updateUiState { it.copy(sttText = sttText, sttStatus = "STT 완료") }
 
             // Step 2: 2~3문장 간단 요약 (voice_memo 모드)
             updateUiState { it.copy(summaryStatus = "요약 중...") }
@@ -1534,22 +1568,40 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                     _uiState.value = _uiState.value.copy(summaryProgress = p)
                 }
             }
-            val sumResult = when {
-                aiEngine == "claude" && config.claudeApiKey.isNotBlank() ->
-                    claudeService.summarize(sttText, config.claudeApiKey, "voice_memo", onProgress = safeOnProgress)
-                        .let { Pair(it.success, it.text) }
-                config.geminiApiKey.isNotBlank() ->
-                    geminiService.summarize(sttText, config.geminiApiKey, "voice_memo", onProgress = safeOnProgress)
-                        .let { Pair(it.success, it.text) }
-                else ->
-                    claudeService.summarize(sttText, config.claudeApiKey, "voice_memo", onProgress = safeOnProgress)
-                        .let { Pair(it.success, it.text) }
+            // ★ v3.7.9: 요약도 일시 오류 대비 재시도. 실패해도 STT는 보존했으므로 재개 시 재-STT 없이 요약부터.
+            var rawSummary = ""
+            var sumErr = ""
+            var sumOk = false
+            val sumMaxTry = 3
+            for (attempt in 1..sumMaxTry) {
+                updateUiState { it.copy(summaryStatus = if (attempt == 1) "요약 중..." else "요약 재시도 ($attempt/$sumMaxTry)...") }
+                if (attempt > 1) kotlinx.coroutines.delay(if (attempt == 2) 2000L else 5000L)
+                val r = when {
+                    aiEngine == "claude" && config.claudeApiKey.isNotBlank() ->
+                        claudeService.summarize(sttText, config.claudeApiKey, "voice_memo", onProgress = safeOnProgress)
+                            .let { Pair(it.success, it.text) }
+                    config.geminiApiKey.isNotBlank() ->
+                        geminiService.summarize(sttText, config.geminiApiKey, "voice_memo", onProgress = safeOnProgress)
+                            .let { Pair(it.success, it.text) }
+                    else ->
+                        claudeService.summarize(sttText, config.claudeApiKey, "voice_memo", onProgress = safeOnProgress)
+                            .let { Pair(it.success, it.text) }
+                }
+                if (r.first && r.second.isNotBlank()) { sumOk = true; rawSummary = r.second; break }
+                sumErr = r.second
+                Log.w(TAG, "VoiceMemo 요약 시도 $attempt/$sumMaxTry 실패: ${sumErr.take(160)}")
             }
-            if (!sumResult.first) {
-                updateUiState { it.copy(isProcessing = false, error = "요약 실패:\n${sumResult.second}") }
+            if (!sumOk) {
+                // STT는 성공했으므로 재개 시 STT를 건너뛰고 요약부터 — 재변환 비용·시간 절약.
+                resumableVoiceMemoAudio = audioFile
+                resumableVoiceMemoStt = sttText
+                updateUiState { it.copy(
+                    isProcessing = false,
+                    voiceMemoResumeFile = audioFile.absolutePath,
+                    error = "AI 요약에 실패했습니다.\n(STT 변환은 완료되어 보존됨)\n\n$sumErr\n\n👉 '🔁 다시 시도'를 누르면 STT 재변환 없이 요약부터 이어서 진행합니다."
+                ) }
                 return
             }
-            val rawSummary = sumResult.second
 
             // ★ v3.7: 음성 메모 JSON(요약 + 날짜별 액션 아이템) 파싱
             val (parsedSummary, parsedItems) = parseVoiceMemoJson(rawSummary)
@@ -1699,13 +1751,44 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                            else "\n📓 Obsidian voice_memos 저장 완료")
                 }
             }
-            updateUiState { it.copy(isProcessing = false, saveStatus = status) }
+            // ★ v3.7.9: 정상 완료 — 재처리(resume) 컨텍스트 해제
+            resumableVoiceMemoAudio = null
+            resumableVoiceMemoStt = null
+            updateUiState { it.copy(isProcessing = false, saveStatus = status, voiceMemoResumeFile = "") }
             NotificationHelper.notifySummaryComplete(getApplication(), "${baseName}.md")
             Log.d(TAG, "VoiceMemo complete: $baseName")
 
         } catch (e: Throwable) {
             Log.e(TAG, "VoiceMemo pipeline error", e)
-            updateUiState { it.copy(isProcessing = false, error = "음성메모 처리 오류:\n${e.message?.take(300)}") }
+            // ★ v3.7.9: 예기치 못한 오류도 같은 녹음으로 재시도 가능하게 — 녹음 자체는 이미 저장됨
+            resumableVoiceMemoAudio = audioFile
+            updateUiState { it.copy(
+                isProcessing = false,
+                voiceMemoResumeFile = audioFile.absolutePath,
+                error = "음성메모 처리 중 오류가 발생했습니다.\n(녹음 파일은 저장됨)\n\n${e.message?.take(300)}\n\n👉 '🔁 다시 시도'를 누르면 이 녹음으로 이어서 진행합니다."
+            ) }
+        }
+    }
+
+    /**
+     * ★ v3.7.9: 음성메모 파이프라인이 STT/요약에서 실패해 중단됐을 때, 같은 녹음으로 이어서 재처리한다.
+     *   - resumableVoiceMemoStt 가 있으면(요약 단계 실패) STT를 건너뛰고 요약부터 재개
+     *   - 없으면(STT 단계 실패) STT부터 재개
+     */
+    fun resumeVoiceMemo() {
+        val audio = resumableVoiceMemoAudio
+        if (audio == null || !audio.exists()) {
+            _uiState.value = _uiState.value.copy(
+                voiceMemoResumeFile = "",
+                error = "다시 시도할 녹음 파일을 찾을 수 없습니다.\n회의 목록에서 해당 녹음을 선택해 수동으로 STT·요약을 실행해주세요."
+            )
+            return
+        }
+        val preset = resumableVoiceMemoStt
+        viewModelScope.launch(Dispatchers.IO + exceptionHandler) {
+            updateUiState { it.copy(isProcessing = true, error = null, voiceMemoResumeFile = "") }
+            Log.d(TAG, "VoiceMemo resume — file=${audio.name}, presetStt=${preset != null}")
+            runVoiceMemo(audio, preset)
         }
     }
 
