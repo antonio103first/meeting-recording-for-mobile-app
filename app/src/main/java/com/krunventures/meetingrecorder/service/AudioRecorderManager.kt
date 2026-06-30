@@ -51,6 +51,7 @@ class AudioRecorderManager(private val context: Context) {
         private const val AGC_TARGET_PEAK = 0.5f       // 목표 피크 ≈ -6 dBFS
         private const val AGC_MAX = 8.0f               // ★v3.7.15: 48kHz로 원시 입력↑ → 과증폭 불필요(24→8), 잡음 억제
         private const val AGC_NOISE_GATE = 0.004f      // ★v3.7.16: 무음/잡음 구간만 막도록 살짝 낮춤(작은 발화는 통과)
+        private const val LIMIT_THRESH = 26000         // ★v3.7.18: 소프트 리미터 임계(≈-2dBFS). 이 위는 tanh로 부드럽게 눌러 0dBFS 포화(클리핑) 방지
         private const val MIN_GAIN = 1.0f
         private const val MAX_GAIN = 8.0f
     }
@@ -298,10 +299,19 @@ class AudioRecorderManager(private val context: Context) {
                         autoGain = if (desired < autoGain) autoGain * 0.4f + desired * 0.6f
                                    else autoGain * 0.9f + desired * 0.1f
                         val g = (autoGain * gain).coerceIn(1.0f, AGC_MAX)
-                        // 3) 적용 + 클리핑 방지 + 진폭 측정
+                        // 3) 적용 + 소프트 리미터(클리핑 방지) + 진폭 측정
                         var maxAmp = 0
                         for (i in 0 until read) {
                             var s = (pcm[i] * g).toInt()
+                            // ★ v3.7.18: 소프트 리미터 — 임계(≈-2dBFS) 위는 tanh로 부드럽게 눌러
+                            //   0dBFS 포화(하드 클리핑=찌그러짐)를 막음. 큰 소리도 매끄럽게 천장에 수렴.
+                            val a0 = abs(s)
+                            if (a0 > LIMIT_THRESH) {
+                                val over = (a0 - LIMIT_THRESH).toFloat() / (32767 - LIMIT_THRESH)
+                                val lim = LIMIT_THRESH + ((32767 - LIMIT_THRESH) * kotlin.math.tanh(over.toDouble())).toInt()
+                                s = if (s < 0) -lim else lim
+                            }
+                            // 최종 안전 클램프(이론상 도달 안 함)
                             if (s > 32767) s = 32767 else if (s < -32768) s = -32768
                             pcm[i] = s.toShort()
                             val a = abs(s)

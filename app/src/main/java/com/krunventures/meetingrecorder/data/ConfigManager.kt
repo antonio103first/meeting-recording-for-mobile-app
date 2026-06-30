@@ -369,8 +369,16 @@ class ConfigManager(private val context: Context) {
             val treeUri = Uri.parse(safUriString)
             var currentDoc = DocumentFile.fromTreeUri(context, treeUri) ?: return null
 
+            // ★ v3.7.17: 선택한 SAF 루트 폴더명이 subPath 의 선두 세그먼트와 겹치면 그 세그먼트를 건너뜀.
+            //   사용자가 vault 루트가 아니라 '08_회의록' 폴더 자체를 저장 위치로 고른 경우
+            //   08_회의록/08_회의록 이중 폴더가 생기던 문제를 방지(루트면 그대로 동작).
+            val segments = subPath.split("/").filter { it.isNotBlank() }.toMutableList()
+            while (segments.isNotEmpty() && currentDoc.name == segments.first()) {
+                segments.removeAt(0)
+            }
+
             // 서브폴더 순서대로 탐색 / 없으면 생성
-            for (segment in subPath.split("/").filter { it.isNotBlank() }) {
+            for (segment in segments) {
                 currentDoc = currentDoc.findFile(segment)
                     ?: currentDoc.createDirectory(segment)
                     ?: run {

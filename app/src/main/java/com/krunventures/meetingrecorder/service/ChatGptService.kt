@@ -173,6 +173,7 @@ class ChatGptService {
             "flow" -> GeminiService.SUMMARY_FLOW
             "lecture_md" -> GeminiService.SUMMARY_LECTURE_MD
             "conference" -> GeminiService.SUMMARY_CONFERENCE
+            "org" -> GeminiService.SUMMARY_ORG
             else -> GeminiService.SUMMARY_SPEAKER
         }
 

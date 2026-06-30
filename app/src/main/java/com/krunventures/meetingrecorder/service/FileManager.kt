@@ -17,6 +17,7 @@ class FileManager {
         "flow" -> "네트워킹"
         "lecture_md" -> "강의요약"
         "conference" -> "컨퍼런스"
+        "org" -> "단체회의"
         else -> "주간회의"
     }
 
