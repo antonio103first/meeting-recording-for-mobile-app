@@ -42,9 +42,15 @@ enum class RecordingState { IDLE, RECORDING, PAUSED, AUDIO_FOCUS_LOST }
 class AudioRecorderManager(private val context: Context) {
     companion object {
         private const val TAG = "AudioRecorderManager"
-        private const val SAMPLE_RATE = 16000          // STT 표준 입력 (CLOVA/Whisper)
+        private const val SAMPLE_RATE = 16000          // ★v3.7.16: 48k 되돌림(이 단말은 48k MIC 입력이 더 작았음). VOICE_COMMUNICATION 음성대역
         private const val AAC_BIT_RATE = 32000         // 32kbps AAC — 음성 녹음 최적
-        private const val DEFAULT_GAIN = 4.0f          // 기본 증폭 배수
+        private const val DEFAULT_GAIN = 1.0f          // 사용자 트림(기본 1.0×) — 실제 증폭은 ★v3.7.13 소프트웨어 AGC가 담당
+        // ★ v3.7.13/14: 소프트웨어 자동게인(AGC) — 입력이 작거나 멀어도 목표 레벨로 자동 증폭(거리·음량 무관 일정 크기)
+        //   v3.7.14: '핫 스타트(높은 게인에서 시작) + 큰 소리에서만 빠르게 감쇠' 방식으로 변경 →
+        //   작은/짧은 발화도 첫 순간부터 충분히 키워 담김. (이전엔 천천히 올라가 짧은 말을 못 키웠음)
+        private const val AGC_TARGET_PEAK = 0.5f       // 목표 피크 ≈ -6 dBFS
+        private const val AGC_MAX = 8.0f               // ★v3.7.15: 48kHz로 원시 입력↑ → 과증폭 불필요(24→8), 잡음 억제
+        private const val AGC_NOISE_GATE = 0.004f      // ★v3.7.16: 무음/잡음 구간만 막도록 살짝 낮춤(작은 발화는 통과)
         private const val MIN_GAIN = 1.0f
         private const val MAX_GAIN = 8.0f
     }
@@ -64,6 +70,8 @@ class AudioRecorderManager(private val context: Context) {
 
     private var outputFile: File? = null
     private var gain: Float = DEFAULT_GAIN
+    // ★ v3.7.13/14: 동적 자동게인 — 8.0에서 시작해 입력에 맞춰 최대 AGC_MAX까지 빠르게 수렴
+    private var autoGain: Float = 4.0f
 
     private var startTime: Long = 0
     private var pausedDuration: Long = 0
@@ -147,6 +155,7 @@ class AudioRecorderManager(private val context: Context) {
 
             // ★ v3.5: 사용자 설정 게인 로드 (1.0~8.0 범위로 클램프)
             gain = config.recordingGain.coerceIn(MIN_GAIN, MAX_GAIN)
+            autoGain = 4.0f  // ★ v3.7.15: 세션 시작 게인(이후 입력에 맞춰 자동 수렴)
 
             // Step 2: AudioRecord 생성
             val minBuf = AudioRecord.getMinBufferSize(
@@ -157,18 +166,38 @@ class AudioRecorderManager(private val context: Context) {
             }
             val bufferSizeBytes = maxOf(minBuf, 4096) * 2
 
-            val record = AudioRecord(
-                // VOICE_RECOGNITION: 시스템 우선순위가 높아 다른 앱에 마이크를 뺏기기 어려움
+            // ★ v3.7.12: 음원을 CAMCORDER 우선으로 변경(폴백 포함).
+            //   배경(실측 진단): VOICE_RECOGNITION(빅스비 공유·감쇠)·MIC(이 단말에서 세션마다 입력이 매우 약해
+            //   -32~-46dB 무음에 가깝게 잡히는 경우 발생) 모두 불안정. 반면 삼성 기본 녹음기
+            //   (com.sec.android.app.voicenote)는 CAMCORDER 음원을 쓰며 정상 동작 확인. audio 서비스 로그상
+            //   우리 앱 녹음은 항상 'not silenced' → 시스템 차단이 아니라 음원 민감도 문제였음.
+            //   따라서 '동작이 검증된' CAMCORDER 를 1순위로, 초기화 실패 시 MIC→VOICE_RECOGNITION→DEFAULT 폴백.
+            // ★ v3.7.16: VOICE_COMMUNICATION 1순위 — 통화용 음성 경로로 HAL이 음성을 크고 깨끗하게 자동 레벨링
+            //   (MIC/CAMCORDER/VOICE_RECOGNITION 은 이 단말에서 원시 입력이 -32~-63dB로 매우 작았음).
+            //   실패 시 MIC→VOICE_RECOGNITION→CAMCORDER→DEFAULT 폴백.
+            val sources = intArrayOf(
+                MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+                MediaRecorder.AudioSource.MIC,
                 MediaRecorder.AudioSource.VOICE_RECOGNITION,
-                SAMPLE_RATE,
-                AudioFormat.CHANNEL_IN_MONO,
-                AudioFormat.ENCODING_PCM_16BIT,
-                bufferSizeBytes
+                MediaRecorder.AudioSource.CAMCORDER,
+                MediaRecorder.AudioSource.DEFAULT
             )
-            if (record.state != AudioRecord.STATE_INITIALIZED) {
-                record.release()
-                throw Exception("마이크 초기화 실패 (다른 앱이 마이크 사용 중?)")
+            var picked: AudioRecord? = null
+            var pickedSrc = -1
+            for (src in sources) {
+                val r = try {
+                    AudioRecord(src, SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO,
+                        AudioFormat.ENCODING_PCM_16BIT, bufferSizeBytes)
+                } catch (e: Exception) {
+                    Log.w(TAG, "AudioRecord 생성 예외 (source=$src): ${e.message}"); null
+                }
+                if (r != null && r.state == AudioRecord.STATE_INITIALIZED) {
+                    picked = r; pickedSrc = src; break
+                }
+                r?.release()
             }
+            val record = picked ?: throw Exception("마이크 초기화 실패 (다른 앱이 마이크 사용 중?)")
+            Log.d(TAG, "AudioRecord source 선택: $pickedSrc (MIC=${MediaRecorder.AudioSource.MIC})")
             audioRecord = record
 
             // ★ v3.5: 음성 효과 — AGC/AEC OFF (수동 게인 보존), NoiseSuppressor ON (증폭 잡음 억제)
@@ -222,9 +251,13 @@ class AudioRecorderManager(private val context: Context) {
 
     private fun setupAudioEffects(sessionId: Int) {
         try {
-            if (AutomaticGainControl.isAvailable()) {
-                agc = AutomaticGainControl.create(sessionId)?.apply { enabled = false }
-                Log.d(TAG, "AGC disabled (manual gain in control)")
+            // ★ v3.7.14: 하드웨어 AGC 켜기 — 기본 녹음기처럼 작은/먼 소리를 HAL에서 자동 증폭(원시 입력 레벨↑)
+            val agcAvail = AutomaticGainControl.isAvailable()
+            if (agcAvail) {
+                agc = AutomaticGainControl.create(sessionId)?.apply { enabled = true }
+                Log.d(TAG, "AGC ENABLED (hardware auto-gain on, like stock recorder)")
+            } else {
+                Log.w(TAG, "AGC not available on this device — software AGC만 사용")
             }
         } catch (e: Exception) { Log.w(TAG, "AGC setup failed: ${e.message}") }
         try {
@@ -252,10 +285,23 @@ class AudioRecorderManager(private val context: Context) {
                     val record = audioRecord ?: break
                     val read = record.read(pcm, 0, pcm.size)
                     if (read > 0) {
-                        // ★ 게인 적용 + 클리핑 방지 + 진폭 측정
+                        // ★ v3.7.13: 소프트웨어 자동게인(AGC) — 입력 레벨에 맞춰 동적 증폭 후 클리핑 방지·진폭 측정
+                        // 1) 게인 적용 전 원시 피크 측정
+                        var rawPeak = 1
+                        for (i in 0 until read) { val a = abs(pcm[i].toInt()); if (a > rawPeak) rawPeak = a }
+                        // 2) 목표 피크(-6dBFS)에 맞춘 희망 게인 → 스무딩(큰 소리는 빠르게 낮추고, 작은 소리는 천천히 올림)
+                        val rawPeakF = rawPeak / 32768f
+                        // ★ v3.7.15: 노이즈 게이트 — 무음/잡음 구간(게이트 이하)은 증폭하지 않음(잡음 부각 방지)
+                        val desired = if (rawPeakF < AGC_NOISE_GATE) 1.0f
+                                      else (AGC_TARGET_PEAK / rawPeakF).coerceIn(1.0f, AGC_MAX)
+                        // 큰 소리(desired<현재): 즉시 빠르게 내림(클리핑 방지). 작은 소리: 천천히 수렴.
+                        autoGain = if (desired < autoGain) autoGain * 0.4f + desired * 0.6f
+                                   else autoGain * 0.9f + desired * 0.1f
+                        val g = (autoGain * gain).coerceIn(1.0f, AGC_MAX)
+                        // 3) 적용 + 클리핑 방지 + 진폭 측정
                         var maxAmp = 0
                         for (i in 0 until read) {
-                            var s = (pcm[i] * gain).toInt()
+                            var s = (pcm[i] * g).toInt()
                             if (s > 32767) s = 32767 else if (s < -32768) s = -32768
                             pcm[i] = s.toShort()
                             val a = abs(s)

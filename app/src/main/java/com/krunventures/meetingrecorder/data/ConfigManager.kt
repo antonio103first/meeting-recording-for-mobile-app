@@ -49,9 +49,9 @@ class ConfigManager(private val context: Context) {
         set(v) = prefs.edit().putString("summary_mode", v).apply()
 
     // ★ v3.5: 녹음 입력 게인(증폭 배수). AudioRecorderManager가 PCM 샘플에 곱해 음량을 키운다.
-    // 1.0 = 원본, 4.0 = 기본(4배), 최대 8.0. 너무 높으면 클리핑(찌그러짐) 발생.
+    // 1.0 = 기본 트림(★v3.7.13: 실제 증폭은 소프트웨어 AGC가 자동 처리 → 사용자 게인은 추가 트림). 최대 8.0.
     var recordingGain: Float
-        get() = prefs.getFloat("recording_gain", 4.0f)
+        get() = prefs.getFloat("recording_gain", 1.0f)
         set(v) = prefs.edit().putFloat("recording_gain", v.coerceIn(1.0f, 8.0f)).apply()
 
     // === Storage Paths (Android 16 호환 — 앱 전용 디렉토리 사용) ===
