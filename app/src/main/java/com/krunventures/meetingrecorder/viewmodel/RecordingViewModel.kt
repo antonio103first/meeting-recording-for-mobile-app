@@ -730,9 +730,9 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                     ) }
                     return@launch
                 }
-                val summaryText = sumResult.second
+                val summaryText = sumResult.second + sttEngineFooter()  // ★ v3.7.22: 회의록 끝에 STT 엔진 표기
                 updateUiState { it.copy(summaryText = summaryText) }
-                Log.d(TAG, "Summary completed — ${summaryText.length} chars")
+                Log.d(TAG, "Summary completed — ${summaryText.length} chars (STT=$lastSttEngineUsed)")
 
                 // ★ V2.0: AI 요약 완료 알림
                 NotificationHelper.notifySummaryComplete(getApplication(), audioFile.name)
@@ -1060,6 +1060,12 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
     // ★ v3.7.20: STT·요약 파이프라인 동안 네트워크가 절전으로 끊기지 않도록 유지하는 락
     private var pipelineWakeLock: PowerManager.WakeLock? = null
     private var pipelineWifiLock: WifiManager.WifiLock? = null
+    // ★ v3.7.22: 실제로 STT를 수행한 엔진(회의록 표기용). 폴백 시 "Gemini (Clova 실패 자동 폴백)".
+    private var lastSttEngineUsed: String = ""
+
+    /** 회의록 끝에 붙일 STT 엔진 표기 */
+    private fun sttEngineFooter(): String =
+        if (lastSttEngineUsed.isNotBlank()) "\n\n---\n*STT 엔진: $lastSttEngineUsed*" else ""
 
     /** 화면 꺼짐/도즈에서도 네트워크 연결 유지 — CPU(PARTIAL) + Wi-Fi(FULL_HIGH_PERF) 락 */
     private fun acquirePipelineLocks() {
@@ -1152,7 +1158,7 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                     Log.e(TAG, "STT execution failed (attempt $attempt): ${e.message}", e)
                     Pair(false, "STT 변환 중 오류: ${e.message?.take(200) ?: "알 수 없는 오류"}")
                 }
-                if (r.first) return r
+                if (r.first) { lastSttEngineUsed = engineLabel; return r }
                 lastErr = r.second
                 if (!isNetworkError(lastErr)) return r  // 키·형식 등 비네트워크 오류는 즉시 반환(재시도 무의미)
                 Log.w(TAG, "STT 네트워크 오류 — 재시도 예정 (attempt $attempt/$maxTry): ${lastErr.take(120)}")
@@ -1177,6 +1183,7 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 if (gr.first && gr.second.isNotBlank()) {
                     Log.d(TAG, "Gemini STT 폴백 성공")
+                    lastSttEngineUsed = "Gemini ($engineLabel 실패 → 자동 폴백)"
                     return gr
                 }
                 Log.w(TAG, "Gemini STT 폴백도 실패: ${gr.second.take(120)}")
