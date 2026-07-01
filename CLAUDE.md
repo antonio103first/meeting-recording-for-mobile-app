@@ -1,5 +1,7 @@
-# CLAUDE.md — 회의녹음요약 모바일 앱 v3.7.22
+# CLAUDE.md — 회의녹음요약 모바일 앱 v3.7.23
 
+> v3.7.23 (2026-07-01): **설정 화면 '요약 방식'에 본당/단체(org) 누락 수정**. v3.7.18에서 org 양식을 재요약 시트(`SummaryModeBottomSheet`)엔 넣었으나 **`SettingsScreen`의 기본 요약방식 목록엔 빠져** 있었음 → 설정에서 안 보임(새 녹음의 기본 양식은 설정값이라 여기 꼭 필요). `SettingsScreen.kt` 요약 방식 listOf에 `"org" to "본당/단체 회의 (비영리)"` 추가. versionCode 37 / versionName 3.7.23
+>
 > v3.7.22 (2026-07-01): **회의록에 STT 엔진 표기**. 회의록(요약) 끝에 `*STT 엔진: Clova*` / `*STT 엔진: Gemini*` / `*STT 엔진: Gemini (CLOVA Speech 실패 → 자동 폴백)*` 자동 추가 — 나중에 "이 회의록은 어느 엔진으로 뽑혔는지" 추적해 품질 편차 파악. `runStt`가 실제 성공 엔진을 `lastSttEngineUsed`에 기록, 회의 파이프라인 요약 저장 직전(`summaryText + sttEngineFooter()`)에 1회 주입돼 로컬·SAF·Obsidian·Drive 전 저장처에 반영. versionCode 36 / versionName 3.7.22
 >
 > v3.7.21 (2026-07-01): **STT 실패 시 Gemini 자동 폴백**. v3.7.20(락+재시도)에도 긴 녹음(87분) Clova STT가 "재시도 3회 모두 끊김"으로 간헐 실패(Wi-Fi인데도, 나중에 재시도하면 성공). 원인: **Clova 동기 STT가 긴 파일을 한 연결로 수십 분 붙잡는 방식** 자체가 취약(서버 부하·NAT 유휴 타임아웃에 따라 간헐 abort). 근본 대응: `runStt`에서 clova/whisper가 **네트워크 재시도 3회 모두 실패하면 Gemini STT로 자동 폴백**(Gemini는 10분 청크라 요청이 짧아 강함). 사용자가 수동 재시도 안 해도 됨. Gemini 키 있을 때만 동작. versionCode 35 / versionName 3.7.21

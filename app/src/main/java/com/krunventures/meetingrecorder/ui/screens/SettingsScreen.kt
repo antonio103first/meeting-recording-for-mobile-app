@@ -240,7 +240,8 @@ private fun EngineSettingsTab(
                 "phone" to "전화통화 메모",
                 "flow" to "네트워킹(티타임)",
                 "lecture_md" to "강의 요약",
-                "conference" to "컨퍼런스 / 간담회"
+                "conference" to "컨퍼런스 / 간담회",
+                "org" to "본당/단체 회의 (비영리)"
             ).forEach { (value, label) ->
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
                     RadioButton(selected = state.summaryMode == value, onClick = { viewModel.setSummaryMode(value) })
