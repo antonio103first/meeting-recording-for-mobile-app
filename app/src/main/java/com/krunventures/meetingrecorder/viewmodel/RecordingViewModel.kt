@@ -1157,8 +1157,35 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                 if (!isNetworkError(lastErr)) return r  // 키·형식 등 비네트워크 오류는 즉시 반환(재시도 무의미)
                 Log.w(TAG, "STT 네트워크 오류 — 재시도 예정 (attempt $attempt/$maxTry): ${lastErr.take(120)}")
             }
-            return Pair(false, "STT 실패 — 네트워크 재시도 ${maxTry}회 모두 끊겼습니다.\n$lastErr\n\n" +
-                "👉 안정적인 Wi-Fi에서 화면을 켜둔 채 다시 시도하거나, 긴 녹음은 설정에서 STT 엔진을 Gemini로 바꿔보세요(10분씩 나눠 전사).")
+            // ★ v3.7.21: Clova/Whisper 재시도 모두 실패 시 — Gemini STT로 자동 폴백.
+            //   Gemini는 10분 청크로 전사(요청 하나가 짧음)해 '긴 유휴 연결' 취약성을 우회 → 긴 파일에 강함.
+            //   (Clova 동기 STT는 87분 파일을 한 연결로 수십 분 붙잡아 간헐 abort. 수동 재시도 없이 자동 이어받음.)
+            if (engine != "gemini" && config.geminiApiKey.isNotBlank()) {
+                Log.w(TAG, "$engineLabel STT ${maxTry}회 실패 → Gemini STT 자동 폴백")
+                updateUiState { it.copy(
+                    sttStatus = "$engineLabel 실패 → Gemini STT로 자동 전환 중(10분 청크)…",
+                    sttProgress = 0
+                ) }
+                val gr = try {
+                    geminiService.transcribe(
+                        audioFile = audioFile, apiKey = config.geminiApiKey,
+                        numSpeakers = config.getEffectiveNumSpeakers(),
+                        onProgress = safeOnProgress, onStatus = safeOnStatus
+                    ).let { Pair(it.success, it.text) }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Gemini STT 폴백 실패: ${e.message}", e); Pair(false, e.message ?: "")
+                }
+                if (gr.first && gr.second.isNotBlank()) {
+                    Log.d(TAG, "Gemini STT 폴백 성공")
+                    return gr
+                }
+                Log.w(TAG, "Gemini STT 폴백도 실패: ${gr.second.take(120)}")
+            }
+            return Pair(false, "STT 실패 — 네트워크 재시도 ${maxTry}회" +
+                (if (engine != "gemini" && config.geminiApiKey.isNotBlank()) " + Gemini 폴백" else "") +
+                "까지 모두 끊겼습니다.\n$lastErr\n\n" +
+                "👉 안정적인 Wi-Fi에서 화면을 켜둔 채 잠시 후 다시 시도해주세요." +
+                (if (config.geminiApiKey.isBlank()) "\n(설정에 Gemini 키를 넣으면 Clova 실패 시 자동으로 Gemini가 이어받습니다.)" else ""))
         } finally {
             releasePipelineLocks()
         }
