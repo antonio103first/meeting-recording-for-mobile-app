@@ -3,6 +3,8 @@ package com.krunventures.meetingrecorder.viewmodel
 import android.app.Application
 import android.content.BroadcastReceiver
 import android.content.Context
+import android.net.wifi.WifiManager
+import android.os.PowerManager
 import android.content.Intent
 import android.content.IntentFilter
 import android.net.Uri
@@ -1055,6 +1057,41 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
         // savedRecordingFile은 유지 — 이미 저장된 녹음파일은 삭제하지 않음
     }
 
+    // ★ v3.7.20: STT·요약 파이프라인 동안 네트워크가 절전으로 끊기지 않도록 유지하는 락
+    private var pipelineWakeLock: PowerManager.WakeLock? = null
+    private var pipelineWifiLock: WifiManager.WifiLock? = null
+
+    /** 화면 꺼짐/도즈에서도 네트워크 연결 유지 — CPU(PARTIAL) + Wi-Fi(FULL_HIGH_PERF) 락 */
+    private fun acquirePipelineLocks() {
+        try {
+            val ctx = getApplication<Application>().applicationContext
+            if (pipelineWakeLock == null) {
+                val pm = ctx.getSystemService(Context.POWER_SERVICE) as PowerManager
+                pipelineWakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "meetingrecorder:stt")
+            }
+            if (pipelineWakeLock?.isHeld != true) pipelineWakeLock?.acquire(60 * 60 * 1000L) // 최대 1시간 안전장치
+            if (pipelineWifiLock == null) {
+                val wm = ctx.getSystemService(Context.WIFI_SERVICE) as WifiManager
+                pipelineWifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "meetingrecorder:stt")
+            }
+            if (pipelineWifiLock?.isHeld != true) pipelineWifiLock?.acquire()
+            Log.d(TAG, "STT 파이프라인 락 획득 (WakeLock+WifiLock)")
+        } catch (e: Exception) { Log.w(TAG, "파이프라인 락 획득 실패(무시): ${e.message}") }
+    }
+
+    private fun releasePipelineLocks() {
+        try { if (pipelineWakeLock?.isHeld == true) pipelineWakeLock?.release() } catch (_: Exception) {}
+        try { if (pipelineWifiLock?.isHeld == true) pipelineWifiLock?.release() } catch (_: Exception) {}
+        Log.d(TAG, "STT 파이프라인 락 해제")
+    }
+
+    /** 오류 메시지가 '네트워크성'(재시도 가치 있음)인지 판정 */
+    private fun isNetworkError(msg: String): Boolean {
+        val m = msg.lowercase()
+        return listOf("abort", "socket", "timeout", "시간 초과", "네트워크", "연결", "reset",
+            "ssl", "unable to resolve host", "unknownhost", "econn", "broken pipe").any { m.contains(it) }
+    }
+
     private suspend fun runStt(audioFile: File): Pair<Boolean, String> {
         val engine = config.sttEngine
         val engineLabel = when (engine) {
@@ -1082,43 +1119,48 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
             } catch (e: Exception) { Log.e(TAG, "STT onStatus callback error", e) }
         }
 
-        return try {
-            when (engine) {
-                "clova" -> {
-                    val result = clovaService.transcribe(
-                        audioFile = audioFile,
-                        invokeUrl = config.clovaInvokeUrl,
-                        secretKey = config.clovaSecretKey,
-                        numSpeakers = config.getEffectiveNumSpeakers(),
-                        onProgress = safeOnProgress,
-                        onStatus = safeOnStatus
-                    )
-                    Pair(result.success, result.text)
+        // ★ v3.7.20: STT 동안 WakeLock+WifiLock 유지(화면 꺼짐 시 유휴 연결 끊김=connection abort 방지)
+        //   + 네트워크성 오류는 최대 3회 재시도(clova/whisper는 자체 재시도가 없어 여기서 흡수).
+        acquirePipelineLocks()
+        try {
+            val maxTry = 3
+            var lastErr = "알 수 없는 오류"
+            for (attempt in 1..maxTry) {
+                if (attempt > 1) {
+                    updateUiState { it.copy(sttStatus = "$engineLabel STT 재시도 ($attempt/$maxTry)…") }
+                    kotlinx.coroutines.delay(if (attempt == 2) 3000L else 8000L)
                 }
-                "whisper" -> {
-                    val result = chatGptService.transcribe(
-                        audioFile = audioFile,
-                        apiKey = config.chatGptApiKey,
-                        numSpeakers = config.getEffectiveNumSpeakers(),
-                        onProgress = safeOnProgress,
-                        onStatus = safeOnStatus
-                    )
-                    Pair(result.success, result.text)
+                val r: Pair<Boolean, String> = try {
+                    when (engine) {
+                        "clova" -> clovaService.transcribe(
+                            audioFile = audioFile, invokeUrl = config.clovaInvokeUrl,
+                            secretKey = config.clovaSecretKey, numSpeakers = config.getEffectiveNumSpeakers(),
+                            onProgress = safeOnProgress, onStatus = safeOnStatus
+                        ).let { Pair(it.success, it.text) }
+                        "whisper" -> chatGptService.transcribe(
+                            audioFile = audioFile, apiKey = config.chatGptApiKey,
+                            numSpeakers = config.getEffectiveNumSpeakers(),
+                            onProgress = safeOnProgress, onStatus = safeOnStatus
+                        ).let { Pair(it.success, it.text) }
+                        else -> geminiService.transcribe(
+                            audioFile = audioFile, apiKey = config.geminiApiKey,
+                            numSpeakers = config.getEffectiveNumSpeakers(),
+                            onProgress = safeOnProgress, onStatus = safeOnStatus
+                        ).let { Pair(it.success, it.text) }
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "STT execution failed (attempt $attempt): ${e.message}", e)
+                    Pair(false, "STT 변환 중 오류: ${e.message?.take(200) ?: "알 수 없는 오류"}")
                 }
-                else -> { // gemini
-                    val result = geminiService.transcribe(
-                        audioFile = audioFile,
-                        apiKey = config.geminiApiKey,
-                        numSpeakers = config.getEffectiveNumSpeakers(),
-                        onProgress = safeOnProgress,
-                        onStatus = safeOnStatus
-                    )
-                    Pair(result.success, result.text)
-                }
+                if (r.first) return r
+                lastErr = r.second
+                if (!isNetworkError(lastErr)) return r  // 키·형식 등 비네트워크 오류는 즉시 반환(재시도 무의미)
+                Log.w(TAG, "STT 네트워크 오류 — 재시도 예정 (attempt $attempt/$maxTry): ${lastErr.take(120)}")
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "STT execution failed: ${e.message}", e)
-            Pair(false, "STT 변환 중 오류: ${e.message?.take(200) ?: "알 수 없는 오류"}")
+            return Pair(false, "STT 실패 — 네트워크 재시도 ${maxTry}회 모두 끊겼습니다.\n$lastErr\n\n" +
+                "👉 안정적인 Wi-Fi에서 화면을 켜둔 채 다시 시도하거나, 긴 녹음은 설정에서 STT 엔진을 Gemini로 바꿔보세요(10분씩 나눠 전사).")
+        } finally {
+            releasePipelineLocks()
         }
     }
 
