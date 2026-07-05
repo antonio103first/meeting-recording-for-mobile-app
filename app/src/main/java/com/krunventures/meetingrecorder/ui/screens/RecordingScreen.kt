@@ -69,6 +69,9 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
     var fullScreenText by remember { mutableStateOf("") }
     var showFullScreen by remember { mutableStateOf(false) }
 
+    // ★ v3.8: 음성 메모 발화 가이드 접었다 펴기 상태 (기본 접힘)
+    var guideExpanded by remember { mutableStateOf(false) }
+
     // ★ v3.6.1: 인앱 파일 선택 다이얼로그(최신 날짜순) 표시 상태
     var showAudioPicker by remember { mutableStateOf(false) }
     var showSttPicker by remember { mutableStateOf(false) }
@@ -270,6 +273,95 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
                     enabled = isIdle
                 ) {
                     Text("📝 음성 메모", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+
+            // === 발화 가이드 (음성 메모 전용, 접었다 펴기) ===
+            // ★ v3.8: 맨 앞에 "종류"를 말하면 자동화(Voice-to-Vault)가 데일리노트 섹션으로 분배
+            if (isVoiceMemo) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+                    ),
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        // 헤더 — 탭하면 펼침/접힘
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { guideExpanded = !guideExpanded }
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "ⓘ 발화 가이드 · \"종류\"를 먼저 말하세요",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Icon(
+                                if (guideExpanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                                contentDescription = if (guideExpanded) "접기" else "펼치기",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        AnimatedVisibility(visible = guideExpanded) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(start = 16.dp, end = 16.dp, bottom = 14.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
+                                Text(
+                                    "맨 앞에 종류를 붙여 말하세요 👇",
+                                    fontSize = 12.sp, fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                // 9종 키워드 격자 (3 × 3)
+                                val guideRows = listOf(
+                                    listOf("📇 개인", "🔍 검토중업체", "💼 포폴업체"),
+                                    listOf("⛳ 골프", "🤝 사내", "🍽️ 식사"),
+                                    listOf("🎪 행사", "✅ 할일", "📝 메모"),
+                                )
+                                guideRows.forEach { row ->
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        row.forEach { kw ->
+                                            Text(
+                                                kw, fontSize = 13.sp,
+                                                color = MaterialTheme.colorScheme.onSurface,
+                                                modifier = Modifier.weight(1f)
+                                            )
+                                        }
+                                    }
+                                }
+                                Spacer(Modifier.height(2.dp))
+                                Text(
+                                    "형식:  종류, 이름/회사, 유형, 장소, 내용",
+                                    fontSize = 12.sp, fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Text(
+                                    "예) \"검토중업체, 메타씨앤아이, 1차미팅, 우리 사무실, 텀시트 논의\"",
+                                    fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    "      \"개인, 김철수, 점심, 스시조, 근황 나눔\"",
+                                    fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    "💡 여러 개 이어서 말해도 OK",
+                                    fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
                 }
             }
 

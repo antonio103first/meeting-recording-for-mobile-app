@@ -1,5 +1,7 @@
-# CLAUDE.md — 회의녹음요약 모바일 앱 v3.7.23
+# CLAUDE.md — 회의녹음요약 모바일 앱 v3.7.24
 
+> v3.7.24 (2026-07-05): **요약(summary) 타임아웃·실패 근본 수정 — STT v3.7.20 락 로직을 요약 단계에도 이식**. 증상: 회의요약이 자주 타임아웃/실패. 원인(코드 진단): STT는 v3.7.20에서 WakeLock+WifiLock을 잡아 화면 꺼짐 시 `connection abort`를 막았으나 **요약 단계는 락을 전혀 안 잡았음** — 요약(긴 회의록은 수 분 소요, Gemini는 maxOutputTokens 65536) 중 화면이 꺼지면 OS가 유휴 Wi-Fi를 끊어 요약이 abort로 실패(STT와 동일 원인이 요약엔 미적용). 게다가 `runSummary`의 재시도 키워드가 한글("연결","네트워크")뿐이라 **Claude/GPT의 영문 `Software caused connection abort` 오류는 매칭 실패 → 재시도 없이 즉시 실패**(Gemini만 오류 문구에 한글이 있어 우연히 재시도됨). 수정: ① `runSummary`(일반 회의)·`runVoiceMemo` 요약 루프·`startResummarize`(수동 재요약) **3개 요약 경로 전부**를 `acquirePipelineLocks()`/`releasePipelineLocks()`로 감쌈 — 화면 꺼져도 네트워크 유지. ② 재시도 판정을 STT와 동일한 튼튼한 `isNetworkError()`(abort/socket/reset/broken pipe/ssl 등 포함)로 통일 → Claude/GPT 연결 끊김도 자동 재시도. ③ `startResummarize`는 기존에 락·재시도가 전혀 없던 단발 호출이었음 → 락 + 최대 3회 재시도(backoff 3s·8s) 추가. ④ 음성메모 요약도 비네트워크 오류면 즉시 중단(무의미 재시도 방지). 문자열/제어흐름-only 변경, 컴파일 검증 완료. (미조정: Gemini 요약 maxOutputTokens 65536은 품질 트레이드오프라 유지) versionCode 38 / versionName 3.7.24
+>
 > v3.7.23 (2026-07-01): **설정 화면 '요약 방식'에 본당/단체(org) 누락 수정**. v3.7.18에서 org 양식을 재요약 시트(`SummaryModeBottomSheet`)엔 넣었으나 **`SettingsScreen`의 기본 요약방식 목록엔 빠져** 있었음 → 설정에서 안 보임(새 녹음의 기본 양식은 설정값이라 여기 꼭 필요). `SettingsScreen.kt` 요약 방식 listOf에 `"org" to "본당/단체 회의 (비영리)"` 추가. versionCode 37 / versionName 3.7.23
 >
 > v3.7.22 (2026-07-01): **회의록에 STT 엔진 표기**. 회의록(요약) 끝에 `*STT 엔진: Clova*` / `*STT 엔진: Gemini*` / `*STT 엔진: Gemini (CLOVA Speech 실패 → 자동 폴백)*` 자동 추가 — 나중에 "이 회의록은 어느 엔진으로 뽑혔는지" 추적해 품질 편차 파악. `runStt`가 실제 성공 엔진을 `lastSttEngineUsed`에 기록, 회의 파이프라인 요약 저장 직전(`summaryText + sttEngineFooter()`)에 1회 주입돼 로컬·SAF·Obsidian·Drive 전 저장처에 반영. versionCode 36 / versionName 3.7.22

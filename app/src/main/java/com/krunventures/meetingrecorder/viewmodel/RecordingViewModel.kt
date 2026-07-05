@@ -1219,63 +1219,71 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
             } catch (e: Exception) { Log.e(TAG, "Summary onProgress callback error", e) }
         }
 
-        // ★ v3.0: 최대 2회 재시도 (타임아웃/네트워크 오류 시)
-        val maxRetries = 2
-        var lastError: String = ""
-        for (attempt in 0..maxRetries) {
-            if (attempt > 0) {
-                Log.w(TAG, "Summary retry attempt $attempt / $maxRetries")
-                updateUiState { it.copy(summaryStatus = "$engineLabel 요약 재시도 ($attempt/$maxRetries)...") }
-                kotlinx.coroutines.delay(2000L)  // 2초 대기 후 재시도
+        // ★ v3.7.24: 요약 단계에도 WakeLock+WifiLock 유지.
+        //   기존엔 runStt만 락을 잡고 runSummary는 안 잡아, 요약(수 분 소요) 중 화면이 꺼지면
+        //   OS가 유휴 Wi-Fi를 끊어 connection abort → 요약 실패하던 문제(STT v3.7.20과 동일 원인)를 흡수.
+        acquirePipelineLocks()
+        try {
+            // ★ v3.0: 최대 2회 재시도 (타임아웃/네트워크 오류 시)
+            val maxRetries = 2
+            var lastError: String = ""
+            for (attempt in 0..maxRetries) {
+                if (attempt > 0) {
+                    Log.w(TAG, "Summary retry attempt $attempt / $maxRetries")
+                    updateUiState { it.copy(summaryStatus = "$engineLabel 요약 재시도 ($attempt/$maxRetries)...") }
+                    kotlinx.coroutines.delay(if (attempt == 1) 3000L else 8000L)  // backoff 3s·8s
+                }
+                try {
+                    val result = when (aiEngine) {
+                        "claude" -> {
+                            val r = claudeService.summarize(
+                                sttText = sttText,
+                                apiKey = config.claudeApiKey,
+                                summaryMode = mode,
+                                onProgress = safeOnProgress
+                            )
+                            Pair(r.success, r.text)
+                        }
+                        "chatgpt" -> {
+                            val r = chatGptService.summarize(
+                                sttText = sttText,
+                                apiKey = config.chatGptApiKey,
+                                summaryMode = mode,
+                                onProgress = safeOnProgress
+                            )
+                            Pair(r.success, r.text)
+                        }
+                        else -> { // gemini
+                            val r = geminiService.summarize(
+                                sttText = sttText,
+                                apiKey = config.geminiApiKey,
+                                summaryMode = mode,
+                                onProgress = safeOnProgress
+                            )
+                            Pair(r.success, r.text)
+                        }
+                    }
+                    if (result.first) return result  // 성공 시 즉시 반환
+                    lastError = result.second
+                    // ★ v3.7.24: STT와 동일한 튼튼한 네트워크 오류 판정 사용.
+                    //   기존 한글 키워드 리스트는 Claude/GPT의 영문 "connection abort" 오류를 못 잡아
+                    //   연결 끊김 시 재시도 없이 즉시 실패하던 문제가 있었음(isNetworkError는 abort/socket/reset 등 포함).
+                    if (!isNetworkError(result.second)) {
+                        return result  // 키·형식·안전필터 등 비네트워크 오류는 재시도 무의미
+                    }
+                    Log.w(TAG, "Summary failed (retryable): ${result.second.take(100)}")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Summary attempt $attempt failed: ${e.message}", e)
+                    lastError = "요약 중 오류: ${e.message?.take(200) ?: "알 수 없는 오류"}"
+                    if (!isNetworkError(e.message ?: "")) {
+                        return Pair(false, lastError)  // 네트워크 오류가 아니면 재시도 안 함
+                    }
+                }
             }
-            try {
-                val result = when (aiEngine) {
-                    "claude" -> {
-                        val r = claudeService.summarize(
-                            sttText = sttText,
-                            apiKey = config.claudeApiKey,
-                            summaryMode = mode,
-                            onProgress = safeOnProgress
-                        )
-                        Pair(r.success, r.text)
-                    }
-                    "chatgpt" -> {
-                        val r = chatGptService.summarize(
-                            sttText = sttText,
-                            apiKey = config.chatGptApiKey,
-                            summaryMode = mode,
-                            onProgress = safeOnProgress
-                        )
-                        Pair(r.success, r.text)
-                    }
-                    else -> { // gemini
-                        val r = geminiService.summarize(
-                            sttText = sttText,
-                            apiKey = config.geminiApiKey,
-                            summaryMode = mode,
-                            onProgress = safeOnProgress
-                        )
-                        Pair(r.success, r.text)
-                    }
-                }
-                if (result.first) return result  // 성공 시 즉시 반환
-                lastError = result.second
-                // ★ v3.0.2: 네트워크/타임아웃 관련 에러만 재시도
-                val retryKeywords = listOf("timeout", "timed out", "SocketTimeout", "연결", "네트워크", "인터넷", "서버", "SSL")
-                val shouldRetry = retryKeywords.any { result.second.contains(it, ignoreCase = true) }
-                if (!shouldRetry) {
-                    return result  // 네트워크/타임아웃 외 오류는 재시도 안 함
-                }
-                Log.w(TAG, "Summary failed (retryable): ${result.second.take(100)}")
-            } catch (e: Exception) {
-                Log.e(TAG, "Summary attempt $attempt failed: ${e.message}", e)
-                lastError = "요약 중 오류: ${e.message?.take(200) ?: "알 수 없는 오류"}"
-                if (e !is java.net.SocketTimeoutException && e !is java.io.IOException) {
-                    return Pair(false, lastError)  // 네트워크 오류가 아니면 재시도 안 함
-                }
-            }
+            return Pair(false, "$lastError\n(${maxRetries}회 재시도 후 실패)")
+        } finally {
+            releasePipelineLocks()
         }
-        return Pair(false, "$lastError\n(${maxRetries}회 재시도 후 실패)")
     }
 
     // ── V2.0: 재요약 기능 ────────────────────────────────────────
@@ -1437,11 +1445,29 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                     } catch (_: Exception) {}
                 }
 
-                // 요약 실행 (선택된 summaryMode로 1회성 실행)
-                val result = when (aiEngine) {
-                    "claude" -> claudeService.summarize(sttText, config.claudeApiKey, summaryMode, onProgress = safeOnProgress).let { Pair(it.success, it.text) }
-                    "chatgpt" -> chatGptService.summarize(sttText, config.chatGptApiKey, summaryMode, onProgress = safeOnProgress).let { Pair(it.success, it.text) }
-                    else -> geminiService.summarize(sttText, config.geminiApiKey, summaryMode, onProgress = safeOnProgress).let { Pair(it.success, it.text) }
+                // 요약 실행 (선택된 summaryMode로 실행)
+                // ★ v3.7.24: 재요약도 WakeLock+WifiLock 유지 + 네트워크 오류 시 최대 3회 재시도
+                //   (기존엔 락·재시도 없이 단발 호출 → 화면 꺼지면 connection abort로 그냥 실패)
+                var result = Pair(false, "알 수 없는 오류")
+                acquirePipelineLocks()
+                try {
+                    val maxTry = 3
+                    for (attempt in 1..maxTry) {
+                        if (attempt > 1) {
+                            updateUiState { it.copy(resummarizeStatus = "$engineLabel ($modeLabel) 재시도 ($attempt/$maxTry)...") }
+                            kotlinx.coroutines.delay(if (attempt == 2) 3000L else 8000L)
+                        }
+                        result = when (aiEngine) {
+                            "claude" -> claudeService.summarize(sttText, config.claudeApiKey, summaryMode, onProgress = safeOnProgress).let { Pair(it.success, it.text) }
+                            "chatgpt" -> chatGptService.summarize(sttText, config.chatGptApiKey, summaryMode, onProgress = safeOnProgress).let { Pair(it.success, it.text) }
+                            else -> geminiService.summarize(sttText, config.geminiApiKey, summaryMode, onProgress = safeOnProgress).let { Pair(it.success, it.text) }
+                        }
+                        if (result.first) break
+                        if (!isNetworkError(result.second)) break  // 비네트워크 오류는 재시도 무의미
+                        Log.w(TAG, "재요약 실패(재시도 예정) $attempt/$maxTry: ${result.second.take(120)}")
+                    }
+                } finally {
+                    releasePipelineLocks()
                 }
 
                 if (!result.first) {
@@ -1649,23 +1675,30 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
             var sumErr = ""
             var sumOk = false
             val sumMaxTry = 3
-            for (attempt in 1..sumMaxTry) {
-                updateUiState { it.copy(summaryStatus = if (attempt == 1) "요약 중..." else "요약 재시도 ($attempt/$sumMaxTry)...") }
-                if (attempt > 1) kotlinx.coroutines.delay(if (attempt == 2) 2000L else 5000L)
-                val r = when {
-                    aiEngine == "claude" && config.claudeApiKey.isNotBlank() ->
-                        claudeService.summarize(sttText, config.claudeApiKey, "voice_memo", onProgress = safeOnProgress)
-                            .let { Pair(it.success, it.text) }
-                    config.geminiApiKey.isNotBlank() ->
-                        geminiService.summarize(sttText, config.geminiApiKey, "voice_memo", onProgress = safeOnProgress)
-                            .let { Pair(it.success, it.text) }
-                    else ->
-                        claudeService.summarize(sttText, config.claudeApiKey, "voice_memo", onProgress = safeOnProgress)
-                            .let { Pair(it.success, it.text) }
+            // ★ v3.7.24: 음성메모 요약 중에도 WakeLock+WifiLock 유지(화면 꺼짐 시 connection abort 방지)
+            acquirePipelineLocks()
+            try {
+                for (attempt in 1..sumMaxTry) {
+                    updateUiState { it.copy(summaryStatus = if (attempt == 1) "요약 중..." else "요약 재시도 ($attempt/$sumMaxTry)...") }
+                    if (attempt > 1) kotlinx.coroutines.delay(if (attempt == 2) 3000L else 8000L)
+                    val r = when {
+                        aiEngine == "claude" && config.claudeApiKey.isNotBlank() ->
+                            claudeService.summarize(sttText, config.claudeApiKey, "voice_memo", onProgress = safeOnProgress)
+                                .let { Pair(it.success, it.text) }
+                        config.geminiApiKey.isNotBlank() ->
+                            geminiService.summarize(sttText, config.geminiApiKey, "voice_memo", onProgress = safeOnProgress)
+                                .let { Pair(it.success, it.text) }
+                        else ->
+                            claudeService.summarize(sttText, config.claudeApiKey, "voice_memo", onProgress = safeOnProgress)
+                                .let { Pair(it.success, it.text) }
+                    }
+                    if (r.first && r.second.isNotBlank()) { sumOk = true; rawSummary = r.second; break }
+                    sumErr = r.second
+                    Log.w(TAG, "VoiceMemo 요약 시도 $attempt/$sumMaxTry 실패: ${sumErr.take(160)}")
+                    if (!isNetworkError(sumErr)) break  // 비네트워크 오류는 재시도 무의미
                 }
-                if (r.first && r.second.isNotBlank()) { sumOk = true; rawSummary = r.second; break }
-                sumErr = r.second
-                Log.w(TAG, "VoiceMemo 요약 시도 $attempt/$sumMaxTry 실패: ${sumErr.take(160)}")
+            } finally {
+                releasePipelineLocks()
             }
             if (!sumOk) {
                 // STT는 성공했으므로 재개 시 STT를 건너뛰고 요약부터 — 재변환 비용·시간 절약.
