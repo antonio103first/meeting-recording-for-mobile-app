@@ -1764,6 +1764,9 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                 append(sttText.trim())
             }
             val mdContent = buildMemoMd(items, items)  // 로컬 전체 보관본 (전 항목)
+            // ★ v3.9.0: Drive 릴레이용 업로드 본문 — vault 저장본(자동화 대상 frontmatter)과 동일하게.
+            //  obsidian 미설정 시엔 전체 보관본으로 폴백.
+            var driveMemoMd = mdContent
 
             var summarySavedPath = ""
             try {
@@ -1814,12 +1817,45 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
 
                     // 메모 본문을 vault 06_Resources/음성메모/ 에 저장 (요약=전 항목, frontmatter=자동화 대상만)
                     val vaultMd = buildMemoMd(items, itemsForAutomation)
+                    driveMemoMd = vaultMd  // ★ v3.9.0: Drive 릴레이도 vault 저장본과 동일 본문 사용
                     val res = config.writeTextToSafSubDir(vaultMd, obsidianUri, VOICE_MEMO_VAULT_DIR, "${baseName}.md")
                     if (res != null || savedToDailyNote) "ok" else null
                 } catch (e: Exception) {
                     Log.e(TAG, "VoiceMemo Obsidian save failed", e); null
                 }
             } else null
+
+            // ★ v3.9.0: 음성메모 요약본을 Drive 전용 폴더(Obsidian_VoiceMemos)에 추가 업로드.
+            //  PC 자동화 voice_memo_pull 이 30분마다 폴링해 모바일 Obsidian 을 켜지 않아도 PC vault 로 릴레이.
+            //  로컬 vault 저장(위)과 별개의 '추가' 경로 — 실패해도 기존 흐름(Obsidian Sync)은 그대로 보존.
+            if (config.driveAutoUpload) {
+                try {
+                    val driveService = GoogleDriveService(getApplication())
+                    if (driveService.initFromLastAccount()) {
+                        var folderId = config.driveVoiceMemoFolderId
+                        if (folderId.isBlank()) {
+                            val ensured = driveService.ensureFolder("Obsidian_VoiceMemos")
+                            if (ensured.success && ensured.id.isNotBlank()) {
+                                folderId = ensured.id
+                                config.driveVoiceMemoFolderId = folderId
+                            }
+                        }
+                        if (folderId.isNotBlank()) {
+                            val tmp = File(getApplication<MeetingApp>().cacheDir, "${baseName}.md")
+                            tmp.writeText(driveMemoMd, Charsets.UTF_8)
+                            val up = driveService.uploadFile(tmp, folderId)
+                            tmp.delete()
+                            Log.d(TAG, "VoiceMemo Drive relay: success=${up.success} ${up.message}")
+                        } else {
+                            Log.w(TAG, "VoiceMemo Drive relay: 폴더 확보 실패 — 스킵(로컬 vault 저장은 유지)")
+                        }
+                    } else {
+                        Log.d(TAG, "VoiceMemo Drive relay: Drive 미연결 — 스킵(로컬 vault 저장은 유지)")
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "VoiceMemo Drive relay upload failed (non-critical)", e)
+                }
+            }
 
             // DB 저장: 녹음 정지 시 이미 insert된 레코드를 update, 없으면 새로 insert
             val audioSaved = savedRecordingFile

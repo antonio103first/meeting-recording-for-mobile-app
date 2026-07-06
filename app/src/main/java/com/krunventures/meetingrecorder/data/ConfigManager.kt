@@ -487,6 +487,12 @@ class ConfigManager(private val context: Context) {
         get() = prefs.getString("drive_txt_folder_id", DEFAULT_DRIVE_TXT_FOLDER_ID) ?: DEFAULT_DRIVE_TXT_FOLDER_ID
         set(v) = prefs.edit().putString("drive_txt_folder_id", v).apply()
 
+    // ★ v3.9.0: 음성메모 요약본(.md) 전용 Drive 폴더 — PC 자동화(voice_memo_pull)가 폴링해
+    // 모바일 Obsidian 을 켜지 않아도 PC vault 로 릴레이한다. 폴더 id 는 최초 ensureFolder 후 캐시.
+    var driveVoiceMemoFolderId: String
+        get() = prefs.getString("drive_voicememo_folder_id", "") ?: ""
+        set(v) = prefs.edit().putString("drive_voicememo_folder_id", v).apply()
+
     var driveAutoUpload: Boolean
         get() = prefs.getBoolean("drive_auto_upload", true)
         set(v) = prefs.edit().putBoolean("drive_auto_upload", v).apply()
