@@ -14,8 +14,8 @@ android {
         applicationId = "com.krunventures.meetingrecorder"
         minSdk = 26
         targetSdk = 35
-        versionCode = 39
-        versionName = "3.8.0"
+        versionCode = 40
+        versionName = "3.8.1"
     }
 
     buildTypes {
