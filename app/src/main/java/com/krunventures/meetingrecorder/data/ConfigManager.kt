@@ -54,6 +54,13 @@ class ConfigManager(private val context: Context) {
         get() = prefs.getFloat("recording_gain", 1.0f)
         set(v) = prefs.edit().putFloat("recording_gain", v.coerceIn(1.0f, 8.0f)).apply()
 
+    // ★ v3.10: 차량/블루투스 마이크 사용 토글 (녹음 시작 버튼 옆).
+    //  ON  → BT 헤드셋/차량이 연결돼 있으면 SCO(핸즈프리 마이크)로 녹음, 없으면 폰 마이크(자동 폴백)
+    //  OFF → 항상 폰 내장 마이크(고품질). 기본 OFF(평소 고음질 유지, 차에서만 켜기)
+    var useBluetoothMic: Boolean
+        get() = prefs.getBoolean("use_bluetooth_mic", false)
+        set(v) = prefs.edit().putBoolean("use_bluetooth_mic", v).apply()
+
     // === Storage Paths (Android 16 호환 — 앱 전용 디렉토리 사용) ===
     // getExternalFilesDir()는 권한 없이 읽기/쓰기 가능, 앱 삭제 시 같이 삭제됨
     private val defaultBaseDir: String

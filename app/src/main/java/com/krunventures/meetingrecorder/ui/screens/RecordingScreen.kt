@@ -72,6 +72,11 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
     // ★ v3.8: 음성 메모 발화 가이드 접었다 펴기 상태 (기본 접힘)
     var guideExpanded by remember { mutableStateOf(false) }
 
+    // ★ v3.10: 차량/블루투스 마이크 토글 (녹음 시작 버튼 옆). 값은 ConfigManager 에 즉시 저장.
+    val recCtx = LocalContext.current
+    val btMicConfig = remember(recCtx) { com.krunventures.meetingrecorder.data.ConfigManager(recCtx) }
+    var useBluetoothMic by remember { mutableStateOf(btMicConfig.useBluetoothMic) }
+
     // ★ v3.6.1: 인앱 파일 선택 다이얼로그(최신 날짜순) 표시 상태
     var showAudioPicker by remember { mutableStateOf(false) }
     var showSttPicker by remember { mutableStateOf(false) }
@@ -475,6 +480,22 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
                                     Spacer(Modifier.width(8.dp))
                                     Text("녹음 시작", fontSize = 16.sp, fontWeight = FontWeight.Bold)
                                 }
+                                // ★ v3.10: 차량/블루투스 마이크 즉석 토글 (녹음 시작 버튼 옆)
+                                Spacer(Modifier.width(10.dp))
+                                FilterChip(
+                                    selected = useBluetoothMic,
+                                    onClick = {
+                                        useBluetoothMic = !useBluetoothMic
+                                        btMicConfig.useBluetoothMic = useBluetoothMic
+                                    },
+                                    label = {
+                                        Text(
+                                            if (useBluetoothMic) "🚗 차 마이크 ON" else "🚗 차 마이크",
+                                            fontSize = 12.sp, fontWeight = FontWeight.Bold
+                                        )
+                                    },
+                                    modifier = Modifier.height(52.dp)
+                                )
                             }
                             RecordingState.RECORDING -> {
                                 FilledTonalButton(

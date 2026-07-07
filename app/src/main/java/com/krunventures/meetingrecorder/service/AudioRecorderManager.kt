@@ -1,6 +1,7 @@
 package com.krunventures.meetingrecorder.service
 
 import android.content.Context
+import android.media.AudioDeviceInfo
 import android.media.AudioFocusRequest
 import android.media.AudioFormat
 import android.media.AudioManager
@@ -82,6 +83,10 @@ class AudioRecorderManager(private val context: Context) {
 
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
 
+    // ★ v3.10: 차량/블루투스 마이크(SCO) 활성화 상태 추적 (종료 시 원복용)
+    @Volatile private var scoActivated = false
+    private var savedAudioMode: Int? = null
+
     private val _state = MutableStateFlow(RecordingState.IDLE)
     val state: StateFlow<RecordingState> = _state
 
@@ -148,6 +153,9 @@ class AudioRecorderManager(private val context: Context) {
             if (!focusAcquired) {
                 Log.w(TAG, "Warning: Audio focus not acquired. Recording may be interrupted by other apps.")
             }
+
+            // ★ v3.10: 토글 ON + BT 마이크 연결 시 SCO(차량 핸즈프리 마이크) 활성화 → VOICE_COMMUNICATION 이 차 마이크를 잡음
+            activateBluetoothScoIfNeeded()
 
             saveDir.mkdirs()
             val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
@@ -463,6 +471,61 @@ class AudioRecorderManager(private val context: Context) {
     }
 
     /** 캡처 스레드 종료 대기 + AudioRecord/MediaCodec/MediaMuxer/효과 해제 */
+    // ★ v3.10: 차량/블루투스 마이크(SCO) 활성화·해제 ────────────────────
+    //  A2DP(음악 재생)만 붙으면 마이크 입력은 폰 내장으로 잡힌다. 차 핸즈프리
+    //  마이크(HFP/SCO)를 쓰려면 앱이 명시적으로 SCO 를 켜야 한다.
+    //  ⚠️ SCO(HFP)는 통화 품질(협대역)이라 폰 마이크보다 음질이 낮을 수 있음 → 토글로 제어.
+    private fun activateBluetoothScoIfNeeded() {
+        if (!config.useBluetoothMic) return
+        val am = audioManager ?: return
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {   // Android 12+ : 최신 API
+                val sco = am.availableCommunicationDevices.firstOrNull {
+                    it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+                }
+                if (sco != null) {
+                    scoActivated = am.setCommunicationDevice(sco)
+                    Log.d(TAG, "BT SCO(setCommunicationDevice)=$scoActivated dev=${sco.productName}")
+                } else {
+                    Log.d(TAG, "BT SCO 장치 없음 → 폰 마이크 사용 (자동 폴백)")
+                }
+            } else {                                                // 구버전: 레거시 SCO
+                savedAudioMode = am.mode
+                am.mode = AudioManager.MODE_IN_COMMUNICATION
+                @Suppress("DEPRECATION") am.startBluetoothSco()
+                @Suppress("DEPRECATION") run { am.isBluetoothScoOn = true }
+                scoActivated = true
+                var waited = 0
+                @Suppress("DEPRECATION")
+                while (!am.isBluetoothScoOn && waited < 1500) { Thread.sleep(100); waited += 100 }
+                @Suppress("DEPRECATION")
+                Log.d(TAG, "BT SCO(legacy) started scoOn=${am.isBluetoothScoOn}")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "BT SCO 활성화 실패 → 폰 마이크로 진행: ${e.message}")
+            scoActivated = false
+        }
+    }
+
+    private fun deactivateBluetoothSco() {
+        if (!scoActivated) return
+        val am = audioManager
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                am?.clearCommunicationDevice()
+            } else {
+                @Suppress("DEPRECATION") am?.stopBluetoothSco()
+                @Suppress("DEPRECATION") run { if (am != null) am.isBluetoothScoOn = false }
+                savedAudioMode?.let { am?.mode = it }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "BT SCO 해제 실패: ${e.message}")
+        } finally {
+            scoActivated = false
+            savedAudioMode = null
+        }
+    }
+
     private fun releasePipeline() {
         recordingActive = false
         try {
@@ -473,6 +536,9 @@ class AudioRecorderManager(private val context: Context) {
         try { audioRecord?.stop() } catch (_: Exception) {}
         try { audioRecord?.release() } catch (_: Exception) {}
         audioRecord = null
+
+        // ★ v3.10: 녹음 종료 시 BT SCO 원복 (다른 앱/통화 오디오 라우팅 정상화)
+        deactivateBluetoothSco()
 
         try { encoder?.stop() } catch (_: Exception) {}
         try { encoder?.release() } catch (_: Exception) {}
