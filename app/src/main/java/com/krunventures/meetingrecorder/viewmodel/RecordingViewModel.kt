@@ -72,6 +72,12 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
         // ★ v3.7.1: 음성 메모 본문은 vault 06_Resources/음성메모/ 에 저장 → 데일리노트에서 위키링크로 참조.
         //   자동화 voice_memo_inject 의 최종 위치(VOICE_MEMO_DIR)와 동일.
         private const val VOICE_MEMO_VAULT_DIR = "06_Resources/음성메모"
+        // ★ v3.11: 통화 요약본은 vault 00_Inbox/ 에 저장한다(08_회의록 아님).
+        //   자동화 route_inbox_notes 가 `{인물}_YYYYMMDD_전화통화.md` 를 02_Persons/{인물}/ 로 옮기고,
+        //   처음 보는 인물이면 인덱스 노트까지 만들어 준다 — 08_회의록에 넣으면 이 라우팅을 못 탄다.
+        private const val OBSIDIAN_CALL_SUBDIR = "00_Inbox"
+        // ★ v3.11: 통화 요약은 항상 '전화통화 메모' 양식 — 설정의 기본 요약방식을 건드리지 않는다.
+        private const val CALL_SUMMARY_MODE = "phone"
     }
 
     private val config = ConfigManager(app)
@@ -124,6 +130,23 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
     private var pendingMeetingId: Long = -1L
     // V2.0: 재요약 기능 — 로드된 STT 파일
     private var loadedSttFile: File? = null
+
+    // ★ v3.11: 통화녹음 원클릭 요약 컨텍스트.
+    //   비어 있지 않으면 이번 파이프라인은 '통화 요약'이다 — 요약 양식은 phone 고정,
+    //   Obsidian 저장은 00_Inbox, 파일명은 {인물}_YYYYMMDD_전화통화 가 기본값으로 들어간다.
+    //   confirmFileName/cancelFileName 이 끝나면 해제된다(다음 녹음에 새지 않도록).
+    private var pendingCallRecording: CallRecording? = null
+    private val callRepo by lazy { CallRecordingRepository(getApplication()) }
+
+    private fun clearCallContext() { pendingCallRecording = null }
+
+    /** 이번 파이프라인의 요약 양식 — 통화 요약이면 phone 고정, 아니면 설정값 */
+    private fun activeSummaryMode(): String =
+        if (pendingCallRecording != null) CALL_SUMMARY_MODE else config.summaryMode
+
+    /** 이번 파이프라인의 Obsidian 저장 서브폴더 — 통화 요약이면 00_Inbox, 아니면 08_회의록 */
+    private fun activeObsidianSubdir(): String =
+        if (pendingCallRecording != null) OBSIDIAN_CALL_SUBDIR else OBSIDIAN_MEETING_SUBDIR
 
     /**
      * UI 상태를 메인 스레드에서 안전하게 업데이트
@@ -274,6 +297,7 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
     // ── 녹음 제어 ────────────────────────────────────────────────
 
     fun startRecording() {
+        clearCallContext()  // ★ v3.11: 직전 통화 요약 컨텍스트가 새 녹음에 적용되지 않도록
         // ★ Android 14+ (targetSdk 34+): 포그라운드 서비스가 먼저 실행되어야 마이크 접근 가능
         // 1) 서비스 시작 요청
         // 2) 서비스가 startForeground(MICROPHONE) 완료 후 FOREGROUND_READY 브로드캐스트 발송
@@ -550,6 +574,7 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
     // ── 파일 및 파이프라인 ───────────────────────────────────────
 
     fun setAudioFile(file: File) {
+        clearCallContext()
         currentAudioFile = file
         _uiState.value = _uiState.value.copy(currentFile = file.name)
     }
@@ -566,6 +591,7 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
     fun listLocalSttFiles(): List<File> = fileManager.listSummaryFiles(config.sttSaveDir)
 
     fun setAudioFileFromUri(uri: Uri) {
+        clearCallContext()
         val context = getApplication<MeetingApp>()
         val inputStream = context.contentResolver.openInputStream(uri) ?: return
         val tempFile = File(config.tempRecordingDir, "imported_${System.currentTimeMillis()}.m4a")
@@ -573,6 +599,95 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
         tempFile.outputStream().use { inputStream.copyTo(it) }
         currentAudioFile = tempFile
         _uiState.value = _uiState.value.copy(currentFile = tempFile.name)
+    }
+
+    // ── ★ v3.11: 통화녹음 원클릭 요약 ──────────────────────────
+
+    /** 통화녹음 폴더(Recordings/TPhoneCallRecords)가 등록돼 있는지 */
+    fun hasCallRecordDir(): Boolean = config.callRecordDirUri.isNotBlank()
+
+    /** SAF 폴더 선택 결과 저장 — 영구 권한을 받아 두면 이후엔 다시 묻지 않는다 */
+    fun setCallRecordDir(uri: Uri) {
+        try {
+            getApplication<MeetingApp>().contentResolver.takePersistableUriPermission(
+                uri, Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "통화녹음 폴더 영구 권한 획득 실패", e)
+        }
+        config.callRecordDirUri = uri.toString()
+        Log.d(TAG, "통화녹음 폴더 등록: $uri")
+    }
+
+    /** 최근 통화녹음 목록 (최신순). 폴더 미등록·권한 만료 시 빈 목록 */
+    fun listCallRecordings(limit: Int = 30): List<CallRecording> =
+        callRepo.list(config.callRecordDirUri, config.processedCallRecordings, limit)
+
+    /**
+     * 통화녹음 1건을 원클릭으로 STT + 전화통화 메모 요약.
+     * 회의 파이프라인(runStt → runSummary → 파일명 확인 → 저장)을 그대로 재사용하되,
+     * pendingCallRecording 이 세팅돼 있어 요약 양식(phone)·Obsidian 폴더(00_Inbox)·기본 파일명이 달라진다.
+     */
+    fun startCallSummary(rec: CallRecording) {
+        if (_uiState.value.isProcessing) return
+        _uiState.value = _uiState.value.copy(
+            isProcessing = true,
+            error = null,
+            saveStatus = "📞 통화 녹음을 불러오는 중..."
+        )
+        viewModelScope.launch(Dispatchers.IO + exceptionHandler) {
+            val copied = try {
+                val context = getApplication<MeetingApp>()
+                config.tempRecordingDir.mkdirs()
+                val ext = rec.fileName.substringAfterLast('.', "m4a")
+                val temp = File(config.tempRecordingDir, "call_${rec.yyyymmdd}_${System.currentTimeMillis()}.$ext")
+                context.contentResolver.openInputStream(rec.uri)?.use { input ->
+                    temp.outputStream().use { input.copyTo(it) }
+                } ?: throw IllegalStateException("통화 녹음 파일을 열 수 없습니다.")
+                temp
+            } catch (e: Exception) {
+                Log.e(TAG, "통화 녹음 복사 실패: ${rec.fileName}", e)
+                updateUiState { it.copy(
+                    isProcessing = false,
+                    error = "통화 녹음을 불러오지 못했습니다.\n${e.message?.take(200)}\n\n" +
+                            "폴더 권한이 만료됐을 수 있습니다. 설정에서 통화녹음 폴더를 다시 선택해주세요."
+                ) }
+                return@launch
+            }
+
+            withContext(Dispatchers.Main) {
+                pendingCallRecording = rec
+                currentAudioFile = copied
+                // 음성메모 모드였어도 통화는 회의 파이프라인(STT→요약→파일명 확인)으로 처리한다
+                _uiState.value = _uiState.value.copy(
+                    recordingMode = RecordingMode.MEETING,
+                    currentFile = rec.fileName,
+                    isProcessing = false,   // startPipeline 이 다시 true 로 세운다
+                    sttText = "",
+                    summaryText = "",
+                    metricsText = "",
+                    saveStatus = "📞 ${rec.whoLabel} · ${rec.dateTimeLabel}"
+                )
+                startPipeline()
+            }
+        }
+    }
+
+    /**
+     * 요약본의 '일 시'·'상 대 방' 칸을 파일명에서 확정한 값으로 덮어쓴다.
+     *
+     * 이 두 칸은 원래 AI가 녹취에서 추정하는데 — 전화에선 서로 이름을 안 밝히는 경우가 많아 자주 비고,
+     * '일 시'는 프롬프트의 {dt}(= 요약을 돌린 시각)로 채워져 며칠 전 통화도 오늘 날짜로 찍힌다.
+     * 통화녹음은 파일명에 상대방·소속·통화시각이 다 들어 있으므로 그 값이 정답이다.
+     * 해당 행이 없으면(모델이 양식을 벗어난 경우) 아무 일도 하지 않는다.
+     */
+    private fun applyCallHeader(summary: String, rec: CallRecording): String {
+        val dt = Regex("""^\|\s*일\s*시\s*\|[^\n|]*\|[ \t]*$""", RegexOption.MULTILINE)
+        val who = Regex("""^\|\s*상\s*대\s*방\s*\|[^\n|]*\|[ \t]*$""", RegexOption.MULTILINE)
+        // 람다 overload 사용 — 문자열 overload 는 replacement 의 '$'를 그룹 참조로 해석한다(이름에 $가 들어가면 깨짐)
+        return summary
+            .replace(dt) { "| 일 시 | ${rec.dateTimeLabel} |" }
+            .replace(who) { "| 상 대 방 | ${rec.whoLabel} |" }
     }
 
     fun startPipeline() {
@@ -730,7 +845,11 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                     ) }
                     return@launch
                 }
-                val summaryText = sumResult.second + sttEngineFooter()  // ★ v3.7.22: 회의록 끝에 STT 엔진 표기
+                // ★ v3.7.22: 회의록 끝에 STT 엔진 표기
+                // ★ v3.11: 통화 요약이면 '일 시'·'상 대 방'을 파일명에서 뽑은 확정값으로 교정
+                val summaryText = (sumResult.second + sttEngineFooter()).let { s ->
+                    pendingCallRecording?.let { rec -> applyCallHeader(s, rec) } ?: s
+                }
                 updateUiState { it.copy(summaryText = summaryText) }
                 Log.d(TAG, "Summary completed — ${summaryText.length} chars (STT=$lastSttEngineUsed)")
 
@@ -749,10 +868,10 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                         config.writeTextToSafDir(summaryText, summarySafUriImmediate, "${tempSummaryFileName}.txt")
                         Log.d(TAG, "Summary immediate SAF save done")
                     }
-                    // Obsidian에도 즉시 저장 (★ v3.4.2: 08_회의록 서브폴더)
+                    // Obsidian에도 즉시 저장 (★ v3.4.2: 08_회의록 / ★ v3.11: 통화는 00_Inbox)
                     val obsidianUriImmediate = config.obsidianVaultDir
                     if (obsidianUriImmediate.isNotBlank()) {
-                        config.writeTextToSafSubDir(summaryText, obsidianUriImmediate, OBSIDIAN_MEETING_SUBDIR, "${tempSummaryFileName}.md")
+                        config.writeTextToSafSubDir(summaryText, obsidianUriImmediate, activeObsidianSubdir(), "${tempSummaryFileName}.md")
                         Log.d(TAG, "Obsidian immediate save done")
                     }
                     updateUiState { it.copy(saveStatus = "✅ 회의록 저장 완료 — 파일이름을 입력해주세요...") }
@@ -774,7 +893,9 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
 
                 // Step 4: 파일이름 입력 다이얼로그 표시 → 사용자 확인 후 저장
                 // ★ v3.2: 제목_날짜(요약모드) 형식으로 파일명 자동 생성
-                val suggestedName = fileManager.buildSuggestedFileName(summaryText, config.summaryMode)
+                // ★ v3.11: 통화 요약은 자동화가 인물 노트로 라우팅하는 `{인물}_YYYYMMDD_전화통화` 를 기본값으로
+                val suggestedName = pendingCallRecording?.suggestedFileName
+                    ?: fileManager.buildSuggestedFileName(summaryText, config.summaryMode)
                 pendingSttText = sttText
                 pendingSummaryText = summaryText
                 pendingAudioFile = audioFile
@@ -890,18 +1011,25 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                     Log.d(TAG, "Summary SAF direct save: $summarySafSaved (uri=$safResult)")
                 }
 
-                // ★ v3.0: Obsidian vault에 회의록을 .md 파일로 저장 (★ v3.4.2: 08_회의록 서브폴더)
+                // ★ v3.0: Obsidian vault에 회의록을 .md 파일로 저장
+                // (★ v3.4.2: 08_회의록 서브폴더 / ★ v3.11: 통화 요약은 00_Inbox → 자동화가 인물 노트로 라우팅)
                 var obsidianSaved = false
                 val obsidianUri = config.obsidianVaultDir
                 if (obsidianUri.isNotBlank() && summaryText.isNotBlank()) {
                     try {
                         val mdFileName = "${fileName}.md"
-                        val obsResult = config.writeTextToSafSubDir(summaryText, obsidianUri, OBSIDIAN_MEETING_SUBDIR, mdFileName)
+                        val obsResult = config.writeTextToSafSubDir(summaryText, obsidianUri, activeObsidianSubdir(), mdFileName)
                         obsidianSaved = obsResult != null
-                        Log.d(TAG, "Obsidian vault save: $obsidianSaved (uri=$obsResult)")
+                        Log.d(TAG, "Obsidian vault save: $obsidianSaved (uri=$obsResult, dir=${activeObsidianSubdir()})")
                     } catch (e: Exception) {
                         Log.e(TAG, "Obsidian vault save failed", e)
                     }
+                }
+
+                // ★ v3.11: 통화 요약이 저장됐으면 '처리 완료'로 표시 → 목록에서 ✅ (중복 요약 방지)
+                pendingCallRecording?.let { rec ->
+                    config.markCallRecordingProcessed(rec.fileName)
+                    Log.d(TAG, "통화녹음 처리 완료 표시: ${rec.fileName}")
                 }
 
                 // Step 6: Save to DB — preliminary insert된 레코드가 있으면 update, 없으면 insert
@@ -1037,6 +1165,7 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                 pendingAudioFile = null
                 savedRecordingFile = null
                 pendingMeetingId = -1L
+                clearCallContext()  // ★ v3.11: 통화 컨텍스트가 다음 녹음으로 새지 않도록 해제
             }
         }
     }
@@ -1054,6 +1183,7 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
         pendingSummaryText = null
         pendingAudioFile = null
         pendingMeetingId = -1L
+        clearCallContext()  // ★ v3.11
         // savedRecordingFile은 유지 — 이미 저장된 녹음파일은 삭제하지 않음
     }
 
@@ -1200,7 +1330,8 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
 
     private suspend fun runSummary(sttText: String): Pair<Boolean, String> {
         val aiEngine = config.aiEngine
-        val mode = config.summaryMode
+        // ★ v3.11: 통화 요약이면 '전화통화 메모'(phone) 고정 — 설정의 기본 요약방식은 그대로 둔다
+        val mode = activeSummaryMode()
         val engineLabel = when (aiEngine) {
             "claude" -> "Claude"
             "chatgpt" -> "GPT-4o"

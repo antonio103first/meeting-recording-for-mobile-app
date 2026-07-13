@@ -92,6 +92,18 @@ fun SettingsScreen(viewModel: SettingsViewModel, listVm: MeetingListViewModel) {
         }
     }
 
+    // ★ v3.11: 통화녹음 폴더(Recordings/TPhoneCallRecords) 선택 launcher — 읽기 권한만 필요
+    val callRecordPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri != null) {
+            context.contentResolver.takePersistableUriPermission(
+                uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+            viewModel.setCallRecordDir(uri.toString())
+        }
+    }
+
     // ★ v3.0: Obsidian vault 폴더 선택 launcher
     val obsidianPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
@@ -157,7 +169,7 @@ fun SettingsScreen(viewModel: SettingsViewModel, listVm: MeetingListViewModel) {
             when (selectedTab) {
                 0 -> EngineSettingsTab(viewModel, state)
                 1 -> ApiKeysTab(viewModel, state)
-                2 -> StorageDriveTab(viewModel, state, safBasePickerLauncher, safAudioPickerLauncher, safSttPickerLauncher, safSummaryPickerLauncher, obsidianPickerLauncher, signInLauncher, onExportDb = { exportDbLauncher.launch("meeting_backup_${java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault()).format(java.util.Date())}.json") }, onImportDb = { importDbLauncher.launch("application/json") }, onScanLocalFiles = { listVm.scanLocalFiles() }, dbStatus = listState.statusMessage)
+                2 -> StorageDriveTab(viewModel, state, safBasePickerLauncher, safAudioPickerLauncher, safSttPickerLauncher, safSummaryPickerLauncher, obsidianPickerLauncher, callRecordPickerLauncher, signInLauncher, onExportDb = { exportDbLauncher.launch("meeting_backup_${java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault()).format(java.util.Date())}.json") }, onImportDb = { importDbLauncher.launch("application/json") }, onScanLocalFiles = { listVm.scanLocalFiles() }, dbStatus = listState.statusMessage)
             }
             Spacer(Modifier.height(80.dp))
         }
@@ -537,6 +549,7 @@ private fun StorageDriveTab(
     safSttPickerLauncher: androidx.activity.result.ActivityResultLauncher<android.net.Uri?>,
     safSummaryPickerLauncher: androidx.activity.result.ActivityResultLauncher<android.net.Uri?>,
     obsidianPickerLauncher: androidx.activity.result.ActivityResultLauncher<android.net.Uri?>,
+    callRecordPickerLauncher: androidx.activity.result.ActivityResultLauncher<android.net.Uri?>,
     signInLauncher: androidx.activity.result.ActivityResultLauncher<android.content.Intent>,
     onExportDb: () -> Unit,
     onImportDb: () -> Unit,
@@ -668,6 +681,47 @@ private fun StorageDriveTab(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text("Obsidian 저장 해제", fontSize = 12.sp, color = Danger)
+                }
+            }
+        }
+    }
+
+    // ★ v3.11: 통화녹음 폴더 — 메인 화면 '📞 최근 통화 요약' 이 읽어 갈 폴더
+    Card(colors = CardDefaults.cardColors(containerColor = CardBg), elevation = CardDefaults.cardElevation(2.dp)) {
+        Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+            Text("📞 통화녹음 폴더", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = TextDark)
+            Divider(modifier = Modifier.padding(vertical = 8.dp))
+            Text("메인 화면 ‘📞 최근 통화 요약’ 이 읽어 갈 폴더입니다.\n" +
+                "내장 저장공간 → Recordings → TPhoneCallRecords 를 선택하세요.",
+                fontSize = 12.sp, color = TextLight)
+            Spacer(Modifier.height(8.dp))
+
+            if (state.callRecordDirUri.isNotEmpty()) {
+                Text("✅ ${state.callRecordDisplayPath.ifBlank { "폴더 설정됨" }}",
+                    fontSize = 12.sp, color = Success)
+                Spacer(Modifier.height(4.dp))
+            }
+
+            Button(
+                onClick = {
+                    callRecordPickerLauncher.launch(
+                        com.krunventures.meetingrecorder.service.CallRecordingRepository.initialPickerUri()
+                    )
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0EA5E9)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Filled.Folder, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("통화녹음 폴더 선택", fontSize = 13.sp)
+            }
+
+            if (state.callRecordDirUri.isNotEmpty()) {
+                TextButton(
+                    onClick = { viewModel.setCallRecordDir("") },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("통화녹음 폴더 해제", fontSize = 12.sp, color = Danger)
                 }
             }
         }

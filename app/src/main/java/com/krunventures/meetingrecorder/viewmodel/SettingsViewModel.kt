@@ -40,6 +40,9 @@ data class SettingsUiState(
     val userSelectedSttDir: String = "",
     val userSelectedSummaryDir: String = "",
     val obsidianVaultDir: String = "",
+    // ★ v3.11: 통화녹음 폴더 (Recordings/TPhoneCallRecords)
+    val callRecordDirUri: String = "",
+    val callRecordDisplayPath: String = "",
     val safAudioDisplayPath: String = "",
     val safSttDisplayPath: String = "",
     val safSummaryDisplayPath: String = "",
@@ -94,6 +97,8 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         userSelectedSttDir = config.userSelectedSttDir,
         userSelectedSummaryDir = config.userSelectedSummaryDir,
         obsidianVaultDir = config.obsidianVaultDir,
+        callRecordDirUri = config.callRecordDirUri,
+        callRecordDisplayPath = config.safUriToDisplayPath(config.callRecordDirUri),
         safAudioDisplayPath = config.safUriToDisplayPath(config.getSafUriForAudio()),
         safSttDisplayPath = config.safUriToDisplayPath(config.getSafUriForStt()),
         safSummaryDisplayPath = config.safUriToDisplayPath(config.getSafUriForSummary()),
@@ -195,6 +200,15 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     fun setObsidianVaultDir(uri: String) {
         config.obsidianVaultDir = uri
         _uiState.value = _uiState.value.copy(obsidianVaultDir = uri)
+    }
+
+    /** ★ v3.11: 통화녹음 폴더 (Recordings/TPhoneCallRecords) */
+    fun setCallRecordDir(uri: String) {
+        config.callRecordDirUri = uri
+        _uiState.value = _uiState.value.copy(
+            callRecordDirUri = uri,
+            callRecordDisplayPath = config.safUriToDisplayPath(uri)
+        )
     }
 
     fun testGemini() {

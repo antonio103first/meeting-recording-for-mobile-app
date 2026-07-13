@@ -43,11 +43,15 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.krunventures.meetingrecorder.service.CallRecording
+import com.krunventures.meetingrecorder.service.CallRecordingRepository
 import com.krunventures.meetingrecorder.service.CallState
 import com.krunventures.meetingrecorder.service.RecordingState
 import com.krunventures.meetingrecorder.ui.theme.*
 import com.krunventures.meetingrecorder.viewmodel.RecordingMode
 import com.krunventures.meetingrecorder.viewmodel.RecordingViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -80,6 +84,30 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
     // ★ v3.6.1: 인앱 파일 선택 다이얼로그(최신 날짜순) 표시 상태
     var showAudioPicker by remember { mutableStateOf(false) }
     var showSttPicker by remember { mutableStateOf(false) }
+
+    // ★ v3.11: 통화녹음 원클릭 요약 — 목록 시트 상태
+    var showCallPicker by remember { mutableStateOf(false) }
+    var callRecordings by remember { mutableStateOf<List<CallRecording>>(emptyList()) }
+    var callLoading by remember { mutableStateOf(false) }
+
+    // 통화녹음 폴더(Recordings/TPhoneCallRecords) 1회 등록 — 영구 권한을 받아 두면 이후엔 안 묻는다
+    val callFolderPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            viewModel.setCallRecordDir(uri)
+            showCallPicker = true
+        }
+    }
+
+    // 시트가 열릴 때마다 폴더를 다시 읽는다 (통화 직후에도 최신 목록이 뜨도록). 조회는 IO 스레드에서.
+    LaunchedEffect(showCallPicker) {
+        if (showCallPicker) {
+            callLoading = true
+            callRecordings = withContext(Dispatchers.IO) { viewModel.listCallRecordings() }
+            callLoading = false
+        }
+    }
 
     val filePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
@@ -181,6 +209,23 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
         )
     }
 
+    // ★ v3.11: 최근 통화 녹음 목록 (최신순) — 항목을 누르면 즉시 STT + 전화통화 메모 요약
+    if (showCallPicker) {
+        CallRecordingPickerDialog(
+            recordings = callRecordings,
+            loading = callLoading,
+            onPick = { rec ->
+                showCallPicker = false
+                viewModel.startCallSummary(rec)
+            },
+            onChangeFolder = {
+                showCallPicker = false
+                callFolderPicker.launch(CallRecordingRepository.initialPickerUri())
+            },
+            onDismiss = { showCallPicker = false }
+        )
+    }
+
     // ★ v3.6.1: STT 변환 텍스트 인앱 파일 선택 다이얼로그 (최신 날짜순 정렬)
     if (showSttPicker) {
         LocalFilePickerDialog(
@@ -278,6 +323,25 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
                     enabled = isIdle
                 ) {
                     Text("📝 음성 메모", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+
+            // === ★ v3.11: 통화 녹음 원클릭 요약 ===
+            // 누르면 휴대폰 통화녹음 폴더(Recordings/TPhoneCallRecords)의 최근 통화를 최신순으로 보여주고,
+            // 항목을 고르면 바로 STT → '전화통화 메모' 요약까지 진행한다.
+            // 폴더가 아직 등록 안 됐으면 SAF 폴더 선택(1회)부터 띄운다.
+            run {
+                val isIdle = state.recordingState == RecordingState.IDLE && !state.isProcessing
+                OutlinedButton(
+                    onClick = {
+                        if (viewModel.hasCallRecordDir()) showCallPicker = true
+                        else callFolderPicker.launch(CallRecordingRepository.initialPickerUri())
+                    },
+                    modifier = Modifier.fillMaxWidth().height(44.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    enabled = isIdle
+                ) {
+                    Text("📞 최근 통화 요약", fontSize = 14.sp, fontWeight = FontWeight.Bold)
                 }
             }
 
@@ -1692,6 +1756,149 @@ private fun SummaryModeBottomSheet(
             }
 
             Spacer(Modifier.height(24.dp)) // Bottom safe area
+        }
+    }
+}
+
+/**
+ * ★ v3.11: 최근 통화 녹음 목록 다이얼로그.
+ * 휴대폰 통화녹음 폴더(Recordings/TPhoneCallRecords)를 최신순으로 보여주고,
+ * 항목을 누르면 곧바로 STT + '전화통화 메모' 요약이 시작된다(확인 단계 없음).
+ * 이미 요약을 마친 통화는 ✅ 로 표시된다.
+ */
+@Composable
+private fun CallRecordingPickerDialog(
+    recordings: List<CallRecording>,
+    loading: Boolean,
+    onPick: (CallRecording) -> Unit,
+    onChangeFolder: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 4.dp
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(20.dp)
+            ) {
+                Text(
+                    "📞 최근 통화 녹음",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 19.sp,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    "최신순 · 누르면 바로 STT + 전화통화 메모 요약",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(12.dp))
+
+                when {
+                    loading -> {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                            Spacer(Modifier.width(10.dp))
+                            Text(
+                                "통화 목록을 읽는 중...",
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    recordings.isEmpty() -> {
+                        Text(
+                            "통화 녹음을 찾지 못했습니다.\n\n" +
+                                "‘폴더 다시 선택’을 눌러 통화녹음 폴더를 지정해주세요.\n" +
+                                "(내장 저장공간 → Recordings → TPhoneCallRecords)",
+                            fontSize = 13.sp,
+                            lineHeight = 19.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(vertical = 16.dp)
+                        )
+                    }
+                    else -> {
+                        LazyColumn(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 420.dp)
+                        ) {
+                            items(recordings) { rec ->
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { onPick(rec) }
+                                        .padding(vertical = 12.dp, horizontal = 4.dp)
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            rec.person,
+                                            fontSize = 15.sp,
+                                            fontWeight = FontWeight.Medium,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        if (rec.org.isNotBlank()) {
+                                            Text(
+                                                "  ·  ${rec.org}",
+                                                fontSize = 13.sp,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                modifier = Modifier.weight(1f, fill = false)
+                                            )
+                                        }
+                                        if (rec.processed) {
+                                            Spacer(Modifier.width(6.dp))
+                                            Text("✅", fontSize = 12.sp)
+                                        }
+                                    }
+                                    Spacer(Modifier.height(2.dp))
+                                    Text(
+                                        "${rec.dateLabel}  ·  ${rec.sizeMbLabel}",
+                                        fontSize = 12.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                HorizontalDivider(
+                                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(16.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onChangeFolder,
+                        modifier = Modifier.weight(1f).height(52.dp),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Text("폴더 다시 선택", fontSize = 14.sp)
+                    }
+                    Button(
+                        onClick = onDismiss,
+                        modifier = Modifier.weight(1f).height(52.dp),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Text("닫기", fontSize = 15.sp)
+                    }
+                }
+            }
         }
     }
 }

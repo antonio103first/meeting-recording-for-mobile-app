@@ -97,6 +97,24 @@ class ConfigManager(private val context: Context) {
         get() = prefs.getString("obsidian_vault_dir", "") ?: ""
         set(v) = prefs.edit().putString("obsidian_vault_dir", v).apply()
 
+    // ★ v3.11: 통화녹음 폴더 (SAF tree URI) — Recordings/TPhoneCallRecords
+    //   Scoped Storage 라 File API 접근 불가 → 사용자가 1회 폴더를 등록하고 영구 권한을 보관한다.
+    var callRecordDirUri: String
+        get() = prefs.getString("call_record_dir_uri", "") ?: ""
+        set(v) = prefs.edit().putString("call_record_dir_uri", v).apply()
+
+    /** ★ v3.11: 이미 STT·요약을 마친 통화녹음 파일명 — 목록에 ✅ 표시해 중복 요약을 막는다 */
+    val processedCallRecordings: Set<String>
+        get() = prefs.getStringSet("processed_call_recordings", emptySet()) ?: emptySet()
+
+    fun markCallRecordingProcessed(fileName: String) {
+        if (fileName.isBlank()) return
+        // getStringSet 이 돌려준 Set 은 직접 수정하면 안 됨 (문서화된 제약) → 복사본에 추가
+        val updated = processedCallRecordings.toMutableSet()
+        if (!updated.add(fileName)) return
+        prefs.edit().putStringSet("processed_call_recordings", updated).apply()
+    }
+
     var recordingDir: String
         get() {
             // 1. Check if user has selected a SAF directory
