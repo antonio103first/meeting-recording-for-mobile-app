@@ -17,6 +17,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -74,6 +75,14 @@ fun MeetingRecorderApp() {
     val recordingVm: RecordingViewModel = viewModel()
     val listVm: MeetingListViewModel = viewModel()
     val settingsVm: SettingsViewModel = viewModel()
+
+    // STT/요약 처리 중에는 화면이 자동으로 꺼지지 않도록 유지 (녹음 자체는 폰 설정을 그대로 따름)
+    val recordingUiState by recordingVm.uiState.collectAsState()
+    val view = LocalView.current
+    DisposableEffect(recordingUiState.isProcessing) {
+        view.keepScreenOn = recordingUiState.isProcessing
+        onDispose { view.keepScreenOn = false }
+    }
 
     Scaffold(
         topBar = {
