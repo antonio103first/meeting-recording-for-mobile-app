@@ -85,6 +85,10 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
     var showAudioPicker by remember { mutableStateOf(false) }
     var showSttPicker by remember { mutableStateOf(false) }
 
+    // v4.0.1: 요약 방식 선택을 설정 탭에서 파일 선택 버튼 옆으로 이동
+    var showSumModeSheetA by remember { mutableStateOf(false) }
+    var sumModeA by remember { mutableStateOf(btMicConfig.summaryMode) }
+
     // ★ v3.11: 통화녹음 원클릭 요약 — 목록 시트 상태
     var showCallPicker by remember { mutableStateOf(false) }
     var callRecordings by remember { mutableStateOf<List<CallRecording>>(emptyList()) }
@@ -188,6 +192,19 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
             currentMode = "speaker",
             onDismiss = { viewModel.dismissResummarizeSheet() },
             onSelect = { mode -> viewModel.startResummarize(mode) }
+        )
+    }
+
+    // v4.0.1: 요약방식 선택 BottomSheet (녹음/변환 — 파일 선택 옆 버튼에서 호출)
+    if (showSumModeSheetA) {
+        SummaryModeBottomSheet(
+            currentMode = sumModeA,
+            onDismiss = { showSumModeSheetA = false },
+            onSelect = { mode ->
+                btMicConfig.summaryMode = mode
+                sumModeA = mode
+                showSumModeSheetA = false
+            }
         )
     }
 
@@ -725,21 +742,41 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
                     } else {
                         // ★ v3.0: MP3 파일 선택 버튼 (STT 변환할 오디오 파일 직접 선택)
                         // ★ v3.6.1: 인앱 선택 다이얼로그(최신 날짜순)로 변경
-                        OutlinedButton(
-                            onClick = {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                showAudioPicker = true
-                            },
-                            enabled = !state.isProcessing,
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).height(44.dp),
-                            shape = RoundedCornerShape(12.dp)
+                        // v4.0.1: 옆에 요약 방식 선택 버튼 추가 (설정 탭 기본값 대신 매 변환 시 지정)
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(Icons.Filled.AudioFile, null, modifier = Modifier.size(18.dp))
+                            OutlinedButton(
+                                onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    showAudioPicker = true
+                                },
+                                enabled = !state.isProcessing,
+                                modifier = Modifier.weight(1f).height(44.dp),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Icon(Icons.Filled.AudioFile, null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    if (state.currentFile != "(없음)") "🎵 ${state.currentFile}" else "🎵 MP3/M4A 파일 선택",
+                                    fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
+                                )
+                            }
                             Spacer(Modifier.width(6.dp))
-                            Text(
-                                if (state.currentFile != "(없음)") "🎵 ${state.currentFile}" else "🎵 MP3/M4A 파일 선택",
-                                fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
-                            )
+                            OutlinedButton(
+                                onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    showSumModeSheetA = true
+                                },
+                                enabled = !state.isProcessing,
+                                modifier = Modifier.height(44.dp),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Icon(Icons.Filled.Description, null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text(summaryModeShortLabel(sumModeA), fontSize = 13.sp, maxLines = 1)
+                            }
                         }
 
                         // Pipeline start button (녹음 후 자동 또는 파일 선택 후 수동)
@@ -1612,6 +1649,20 @@ private fun IncomingCallOverlay(
 /**
  * 요약방식 선택 BottomSheet — 재요약 실행 시 표시
  */
+// v4.0.1: 파일 선택 옆 요약방식 버튼에 표시할 짧은 라벨
+private fun summaryModeShortLabel(mode: String): String = when (mode) {
+    "topic" -> "다자간협의"
+    "formal_md" -> "업무미팅"
+    "ir_md" -> "IR미팅"
+    "flow" -> "티타임"
+    "phone" -> "전화통화메모"
+    "lecture_md" -> "강의요약"
+    "speaker" -> "주간회의"
+    "conference" -> "컨퍼런스"
+    "org" -> "단체회의"
+    else -> mode
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SummaryModeBottomSheet(
@@ -1653,19 +1704,19 @@ private fun SummaryModeBottomSheet(
                 Triple("speaker", "주간회의 (화자 중심)",
                     "파트너 주간회의 — 화자별 코드([K2],[K1]등) 구분\n주제별 재분류, 사실 중심 기록"),
                 Triple("topic", "다자간 협의 (안건 중심)",
-                    "기관 협의·다자간 공식회의 — 안건별 구조화\nQ&A 주석, 배경·합의 소항목 구분"),
+                    "기관 협의·다자간 공식회의 — 안건별 구조화\n배경·주요내용·논의 소항목 구분(질의응답도 서술로 통합)"),
                 Triple("formal_md", "회의록(업무)",
-                    "투자업체 사후관리 — 경영현황·재무·IPO·펀드\n전수 포착, Q&A 필수, 경영현황 테이블"),
+                    "투자업체 사후관리 — 경영현황·재무·IPO·펀드\n전수 포착, 서술형 논의 정리, 경영현황 테이블"),
                 Triple("ir_md", "IR 미팅",
                     "IR 미팅 노트 — 기술해자·펀드적합성·투자매력도\n3대 분석축, 경쟁사 비교표, 스코어링"),
                 Triple("phone", "전화통화 메모",
-                    "전화통화 — 주제별 2~3줄 요약 (Q&A 없음)\n[Antonio] 화자 표기, 팩트 기반 서술"),
+                    "전화통화 — 주제별 서술 요약 (Q&A 형식 없음)\n[Antonio] 화자 표기, 팩트 기반 서술"),
                 Triple("flow", "네트워킹(티타임)",
-                    "비공식 미팅·티타임 — 주제별 압축 요약\n현황/주요내용 소항목, Q&A 주석"),
+                    "비공식 미팅·티타임 — 맥락 그룹별 서술 요약\n한눈에/주요논의/후속 구성 (Q&A 형식 없음)"),
                 Triple("lecture_md", "강의 요약",
                     "강의/세미나 — 상세 구조화 마크다운 노트\n이모지 금지, 핵심개념 정리 테이블"),
                 Triple("conference", "컨퍼런스 / 간담회",
-                    "다수 발표자 행사·세미나·라운드테이블\n발표자별 핵심 메시지·인용·Q&A (Q/A 붙여 쓰기)"),
+                    "다수 발표자 행사·세미나·라운드테이블\n발표자별 핵심 메시지·인용, 질의응답은 서술로 통합"),
                 Triple("org", "본당/단체 회의 (비영리)",
                     "본당 상임위·단체·학교 등 부서/분과 회의\n안건 중심·직책 추정 금지·천주교 용어 보정·[케이런] 없음")
             )

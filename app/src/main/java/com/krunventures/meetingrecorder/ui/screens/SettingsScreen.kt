@@ -237,31 +237,7 @@ private fun EngineSettingsTab(
         }
     }
 
-    // Summary Mode
-    Card(colors = CardDefaults.cardColors(containerColor = CardBg), elevation = CardDefaults.cardElevation(2.dp)) {
-        Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
-            Text("요약 방식", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = TextDark)
-            Spacer(Modifier.height(8.dp))
-            Divider(modifier = Modifier.padding(vertical = 8.dp))
-            Spacer(Modifier.height(4.dp))
-            listOf(
-                "speaker" to "주간회의 (화자 중심)",
-                "topic" to "다자간 협의 (안건 중심)",
-                "formal_md" to "회의록(업무)",
-                "ir_md" to "IR 미팅",
-                "phone" to "전화통화 메모",
-                "flow" to "네트워킹(티타임)",
-                "lecture_md" to "강의 요약",
-                "conference" to "컨퍼런스 / 간담회",
-                "org" to "본당/단체 회의 (비영리)"
-            ).forEach { (value, label) ->
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
-                    RadioButton(selected = state.summaryMode == value, onClick = { viewModel.setSummaryMode(value) })
-                    Text(label, fontSize = 13.sp)
-                }
-            }
-        }
-    }
+    // v4.0.1: 요약 방식 선택은 설정 탭에서 제거 — 녹음/변환 화면의 파일 선택 버튼 옆에서 매 변환 시 지정
 
     // Number of Speakers — 자동/수동 선택
     Card(colors = CardDefaults.cardColors(containerColor = CardBg), elevation = CardDefaults.cardElevation(2.dp)) {

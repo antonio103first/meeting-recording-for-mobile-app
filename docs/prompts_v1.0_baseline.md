@@ -1,46 +1,19 @@
-package com.krunventures.meetingrecorder.service
+# 모바일 앱 회의록 요약 프롬프트 V1.0 백업 (원본 스냅샷)
 
-import android.util.Base64
-import android.util.Log
-import com.google.gson.Gson
-import com.google.gson.JsonArray
-import com.google.gson.JsonObject
-import okhttp3.*
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.RequestBody.Companion.toRequestBody
-import java.io.File
-import java.text.SimpleDateFormat
-import java.util.*
-import java.util.concurrent.TimeUnit
+이 문서는 2026-08-25 세션에서 시작한 프롬프트 개편(V2.0: Q&A 대화 형식 제거 + 서술 통합, 본당 org 양식 성당 형식화, 요약방식 선택 UI를 설정 화면에서 녹음 화면 파일 선택 버튼 옆으로 이동) **이전**의 원본 프롬프트 9종 전문을 보존한다.
 
-class GeminiService {
+- 기준 커밋: `75f64ef` (feat: STT/요약 처리 중 화면 자동 꺼짐 방지, v3.11.2 versionCode 47, 2026-08-12)
+- git 태그: `prompts-v1.0` (해당 커밋에 부착)
+- 되돌리는 법: `git checkout prompts-v1.0 -- app/src/main/java/com/krunventures/meetingrecorder/service/GeminiService.kt app/src/main/java/com/krunventures/meetingrecorder/ui/screens/RecordingScreen.kt app/src/main/java/com/krunventures/meetingrecorder/ui/screens/SettingsScreen.kt`
 
-    data class ServiceResult(val success: Boolean, val text: String)
+---
 
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(60, TimeUnit.SECONDS)     // 모바일 네트워크 대응
-        .writeTimeout(300, TimeUnit.SECONDS)      // ★ v3.2.2: 중복 제거, 대용량 프롬프트 전송 대기
-        .readTimeout(3600, TimeUnit.SECONDS)      // 3시간 녹음 STT 처리 대기
-        .retryOnConnectionFailure(true)            // ★ v3.2.2: 연결 실패 시 자동 재시도
-        .build()
-    private val gson = Gson()
+## 주간회의 (speaker)
 
-    // 사용 가능한 모델 (자동 감지 후 설정됨)
-    private var activeModel: String = "gemini-2.5-flash"
+`SUMMARY_SPEAKER`
 
-    companion object {
-        private val MODEL_CANDIDATES = listOf(
-            "gemini-2.5-flash",
-            "gemini-2.0-flash",
-            "gemini-1.5-flash",
-            "gemini-pro"
-        )
-        const val STT_MODEL = "gemini-2.5-flash"
-        const val SUMMARY_MODEL = "gemini-2.5-flash"
-        private const val BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
-
-        // ── 요약 프롬프트 - 주간회의 (화자 중심) ───────────────
-        val SUMMARY_SPEAKER = """당신은 벤처캐피탈(K-Run Ventures) 파트너 주간회의의 전문 회의록 작성자입니다.
+```text
+당신은 벤처캐피탈(K-Run Ventures) 파트너 주간회의의 전문 회의록 작성자입니다.
 아래 회의 전사 내용을 바탕으로 화자 중심의 한국어 회의록을 작성해주세요.
 
 [공통 정밀화 규칙 — 반드시 준수]
@@ -111,10 +84,15 @@ class GeminiService {
 *본 회의록은 녹취 텍스트를 기반으로 AI가 자동 작성하였습니다. 수치·사실관계 확인이 필요한 사항은 추가 검토 바랍니다.*
 
 ---
-회의녹음요약 앱 자동 생성"""
+회의녹음요약 앱 자동 생성
+```
 
-        // ── 요약 프롬프트 - 다자간 협의 (안건 중심) ───────────────
-        val SUMMARY_TOPIC = """당신은 전문 비즈니스 회의록 작성자입니다.
+## 다자간 협의 (topic)
+
+`SUMMARY_TOPIC`
+
+```text
+당신은 전문 비즈니스 회의록 작성자입니다.
 아래 회의 전사 내용은 기관 협의, 다자간 공식회의, 주주총회 등 복수의 이해관계자가 참석한 외부 미팅 녹취록입니다.
 안건·주제 중심으로 구조화하여 공식 회의록 형식으로 작성해주세요.
 
@@ -136,9 +114,18 @@ class GeminiService {
 2. 공식 회의록 기준: 안건별로 협의 내용, 각 기관 입장, 결정사항을 명확히 기록
 3. 사실·팩트 중심: 녹취록에 명시된 수치·발언·결정만 기록. 추측·임의 추가 금지. 불확실한 수치는 (추정) 표기
 4. 상세 서술 원칙: 핵심 논의 내용은 배경·경위·수치·결론을 포함하여 충분히 상세하게 서술. 지나친 압축 금지
-5. **Q&A 대화 형식 금지, 서술로 통합**: `Q [화자]` / `A [화자]` 같은 질의응답 나열 형식을 쓰지 않음. 발표자 외 참석자의 질문·의견·이견도 빠짐없이 포착하되, 오간 순서 그대로 옮기지 말고 **논의의 흐름과 결론을 하나의 요약 문장/문단**으로 녹여 정리함. 발언자가 확인되면 `**[케이런] 의견**:` / `**[상대방 실명] 의견**:` 처럼 그 입장을 요약하는 문장으로 시작. STT에 실제 질문·이견이 불분명한데 억지로 대화가 오간 것처럼 창작하지 않음.
-6. 소제목 내용 구조화: 소제목 아래 내용은 나열식 서술 대신 **배경**, **주요 내용**, **논의 및 합의** 등 굵은 소항목으로 구분하여 정리(마지막 소항목에 참석자 간 오간 의견·이견·합의 과정을 서술로 통합)
-7. 결정사항 명확화: 합의·결정·보류·재협의 여부를 명시
+5. Q&A 원칙: Q&A로 실제 오고간 내용만 기록. 임의 추정하여 내용 추가 금지
+6. Q&A 포착 원칙 — 발표자 외 모든 참석자의 질의·코멘트를 빠짐없이 기록 (v3.0.6 통일 규칙):
+   - 발표자(주 발언자)의 설명에 대해 다른 참석자(케이런 포함)가 질문하거나 의견을 낸 모든 교환을 Q&A로 기록
+   - 참석 기관 간 의견 교환도 Q&A 형식으로 기록
+   - STT 원문 그대로 옮기지 말고 각 Q와 A의 핵심을 한·두 문장으로 요약
+   - **Q를 임의로 만들지 말 것**: STT에 실제 질문이 분명하지 않은데 억지로 Q를 생성하지 않음. 질문으로 정리하기 애매하면 Q&A 대신 서술형 요약으로 정리
+   - **하나의 Q에 여러 명이 답한 경우**: Q 한 줄 아래 답변자별 A를 여러 줄(Q-A-A …)로 나열 가능
+   - Q와 A는 각각 별도 blockquote(>) 줄로 작성
+   - **Q와 A 사이에는 빈 줄을 두지 않는다** (붙여 쓴다)
+   - **A와 다음 Q 사이에는 빈 줄 1줄을 둔다** (Q&A 블록 간 구분)
+7. 소제목 내용 구조화: 소제목 아래 내용은 나열식 서술 대신 **배경**, **주요 내용**, **합의** 등 굵은 소항목으로 구분하여 정리
+8. 결정사항 명확화: 합의·결정·보류·재협의 여부를 명시
 
 [전사 내용]
 {text}
@@ -174,8 +161,11 @@ class GeminiService {
 **주요 내용**
 (핵심 협의 내용 서술)
 
-**논의 및 합의** (이견·질의·답변이 오간 경우)
-(오간 논의를 대화체가 아닌 서술로 통합 정리. 결론은 문장 끝에 →로 명시)
+> **Q [케이런]** (질의 요약)
+> **A [상대방 실명]** (답변 요약)
+
+> **Q [케이런]** (다음 질의 요약)
+> **A [상대방 실명]** (다음 답변 요약)
 
 ## 1.2 [소제목]
 (소제목 수에 따라 반복)
@@ -189,10 +179,15 @@ class GeminiService {
 *본 회의록은 녹취 텍스트를 기반으로 AI가 자동 작성하였습니다.*
 
 ---
-회의녹음요약 앱 자동 생성"""
+회의녹음요약 앱 자동 생성
+```
 
-        // ── 요약 프롬프트 - 회의록(업무) — 투자업체 사후관리 ───────────────
-        val SUMMARY_FORMAL_MD = """당신은 벤처캐피탈(K-Run Ventures)의 전문 투자사후관리 회의록 작성자입니다.
+## 회의록(업무) (formal_md)
+
+`SUMMARY_FORMAL_MD`
+
+```text
+당신은 벤처캐피탈(K-Run Ventures)의 전문 투자사후관리 회의록 작성자입니다.
 아래 회의 전사 내용은 투자업체 또는 포트폴리오사와의 외부 미팅 녹취록입니다.
 투자 집행 이후 사후관리 목적의 업무 협의(경영현황 보고, 추가 지원 협의, 이슈 점검, 상장·Exit 전략 논의 등)에 특화하여 회의록을 작성합니다.
 
@@ -210,7 +205,7 @@ class GeminiService {
 
 [작성 원칙]
 1. 팩트 기반: 대화에서 실제 나눈 내용에만 기초하여 작성. 녹취에 없는 내용 절대 추가 금지
-2. **Q&A 대화 형식 금지, 서술로 통합**: `Q [화자]` / `A [화자]` 나열 형식을 쓰지 않음. 케이런과 상대방 사이에 오간 질의·응답·이견은 순서 그대로 옮기지 말고 **서술 문단**으로 녹여 정리함(실제 질문이 불분명한데 억지로 만들어내지 않음)
+2. Q&A 원칙: Q&A로 실제 오고간 내용만 기록. 임의 추정하여 내용 추가 금지
 3. 전수 포착 원칙: 녹취록에서 논의된 모든 주제를 빠짐없이 대제목(#)으로 분류하여 작성. 분량이 작거나 부수적으로 언급된 내용도 생략하지 않음
 4. 사실 중심 기록: 녹취록에 명시된 내용만 기록. 임의 추가·추론 금지
 5. 데이터 정밀도: 매출·수치·일자·인명·기관명을 정확히 기록. 불확실한 경우 (추정) 표기
@@ -224,8 +219,21 @@ class GeminiService {
    - 주요 고객·파트너십: 계약 현황, 신규 계약, 해지·리스크
    - 인력·조직: 채용, 감원, 조직 개편, 핵심 인력 이슈
    - 기타 케이런이 질의한 모든 사항
-7. 소제목 내용 구조화: 소제목 아래 내용은 나열식 서술 대신 해당 소제목의 주요 내용 흐름에 맞는 굵은 소항목 레이블(예: **매출 구성**, **거래소 피드백**, **청구 요건**, **논의 및 확인사항** 등)로 구분하여 정리. 고정 구조 없이 내용에 따라 자유롭게 명명함. 의미 있는 질의·응답·이견이 있으면 **논의 및 확인사항** 레이블에 서술로 통합
-8. 문체: 모든 서술 문장은 "~음" 종결 (예: "진행 중임", "완료함", "검토 중임")
+7. Q&A 형식 필수 준수 (v3.0.6 통일 규칙):
+   - STT 원문 그대로 옮기지 말고 각 Q와 A의 핵심을 한·두 문장으로 요약
+   - **Q를 임의로 만들지 말 것**: STT에 실제 질문이 분명하지 않은데 억지로 Q를 생성하지 않음. 질문으로 정리하기 애매하면 Q&A 대신 서술형 요약으로 정리
+   - **하나의 Q에 여러 명이 답한 경우**: Q 한 줄 아래 답변자별 A를 여러 줄(Q-A-A …)로 나열 가능
+   - Q와 A는 각각 별도 blockquote(>) 줄로 작성
+   - **Q와 A 사이에는 빈 줄을 두지 않는다** (붙여 쓴다)
+   - **A와 다음 Q 사이에는 빈 줄 1줄을 둔다** (Q&A 블록 간 구분)
+   형식 예시:
+   > **Q [케이런]** (질의 요약)
+   > **A [상대방]** (답변 요약)
+
+   > **Q [케이런]** (다음 질의 요약)
+   > **A [상대방]** (다음 답변 요약)
+8. 소제목 내용 구조화: 소제목 아래 내용은 나열식 서술 대신 해당 소제목의 주요 내용 흐름에 맞는 굵은 소항목 레이블(예: **매출 구성**, **거래소 피드백**, **청구 요건** 등)로 구분하여 정리. 고정 구조 없이 내용에 따라 자유롭게 명명함
+9. 문체: 모든 서술 문장은 "~음" 종결 (예: "진행 중임", "완료함", "검토 중임")
 
 [전사 내용]
 {text}
@@ -284,8 +292,11 @@ class GeminiService {
 **[내용 흐름에 맞는 소항목 레이블 2]**
 (해당 내용 서술)
 
-**논의 및 확인사항** (케이런-상대방 간 의미 있는 질의·응답·이견이 오간 경우에만)
-(오간 논의를 대화체가 아닌 서술로 통합 정리. 결론·확인 필요사항은 문장 끝에 →로 명시. 없으면 이 소항목 자체 생략)
+> **Q [케이런]** (질의 요약)
+> **A [상대방]** (답변 요약)
+
+> **Q [케이런]** (다음 질의 요약)
+> **A [상대방]** (다음 답변 요약)
 
 ## 1.2 [소제목]
 (소제목 수에 따라 반복)
@@ -299,10 +310,15 @@ class GeminiService {
 *본 회의록은 녹취 텍스트를 기반으로 AI가 자동 작성하였습니다.*
 
 ---
-회의녹음요약 앱 자동 생성"""
+회의녹음요약 앱 자동 생성
+```
 
-        // ── 요약 프롬프트 - IR 미팅회의록 ───────────────
-        val SUMMARY_IR_MD = """당신은 벤처캐피탈 K-Run Ventures의 전문 IR 미팅 노트 작성자임.
+## IR 미팅회의록 (ir_md)
+
+`SUMMARY_IR_MD`
+
+```text
+당신은 벤처캐피탈 K-Run Ventures의 전문 IR 미팅 노트 작성자임.
 아래 전사 내용은 피투자사와의 IR 미팅 녹취록임.
 
 ■ 이 노트의 핵심 목적: 실제 질의응답을 통해서만 확인할 수 있었던 정보·뉘앙스·판단 근거를 기록하는 것임.
@@ -585,10 +601,15 @@ class GeminiService {
 *본 회의록은 STT 녹취 텍스트 및 혁신의숲 자동 조회 데이터를 기반으로 AI가 자동 작성하였음. 사실관계 확인이 필요한 사항은 추가 검토 바람.*
 
 ---
-회의녹음요약 앱 자동 생성"""
+회의녹음요약 앱 자동 생성
+```
 
-        // ── 요약 프롬프트 - 전화통화 메모 ───────────────
-        val SUMMARY_PHONE = """당신은 비즈니스 전화통화 내용을 간결하고 정확하게 정리하는 전문 기록자입니다.
+## 전화통화 메모 (phone)
+
+`SUMMARY_PHONE`
+
+```text
+당신은 비즈니스 전화통화 내용을 간결하고 정확하게 정리하는 전문 기록자입니다.
 아래 전사 내용은 전화통화 녹음입니다.
 통화 목적과 핵심 내용을 주제별로 요약하세요.
 
@@ -650,10 +671,15 @@ class GeminiService {
 
 ---
 
-*AI 자동 생성 — 회의녹음요약 앱 | STT 원문 기반 팩트 한정 작성*"""
+*AI 자동 생성 — 회의녹음요약 앱 | STT 원문 기반 팩트 한정 작성*
+```
 
-        // ── 요약 프롬프트 - 네트워킹(티타임) ───────────────
-        val SUMMARY_FLOW = """당신은 비공식 비즈니스 네트워킹 대화를 정확하게 정리하는 전문 기록자입니다.
+## 네트워킹(티타임) (flow)
+
+`SUMMARY_FLOW`
+
+```text
+당신은 비공식 비즈니스 네트워킹 대화를 정확하게 정리하는 전문 기록자입니다.
 아래 전사 내용은 티타임·비공식 미팅·네트워킹 자리에서 오간 대화입니다.
 실제로 오간 내용만 근거로, 사실에 충실한(과장·창작 없는) 네트워킹 메모를 작성하세요.
 
@@ -736,10 +762,15 @@ class GeminiService {
 
 ---
 
-*AI 자동 생성 — 회의녹음요약 앱 | STT 원문 기반 팩트 한정 작성. 화자 구분·고유명사는 STT 한계로 부정확할 수 있음*"""
+*AI 자동 생성 — 회의녹음요약 앱 | STT 원문 기반 팩트 한정 작성. 화자 구분·고유명사는 STT 한계로 부정확할 수 있음*
+```
 
-        // ── 요약 프롬프트 - 강의 요약 ───────────────
-        val SUMMARY_LECTURE_MD = """당신은 전문 강의 노트 작성자입니다.
+## 강의 요약 (lecture_md)
+
+`SUMMARY_LECTURE_MD`
+
+```text
+당신은 전문 강의 노트 작성자입니다.
 아래 [강의 녹취록]을 분석하여 강의를 듣지 않은 사람도 내용을 완전히 이해할 수 있도록
 상세하고 구조화된 마크다운 강의 요약문을 작성해주세요.
 
@@ -759,7 +790,12 @@ class GeminiService {
    - 한 섹션 내에 성격이 뚜렷이 다른 하위 항목이 2개 이상일 때만 **굵은 소제목**을 사용합니다.
    - 단일 흐름으로 연결되는 내용은 소제목 없이 서술형 단락으로 작성합니다.
 5. 번호 섹션 구성 — 강의 흐름에 따라 소주제별로 ## 번호. 소주제명 형식으로 구성합니다.
-6. **Q&A 대화 형식 금지, 서술로 통합** — 강의 중 청중과의 질의응답이 있었다면 `[Q]`/`[A]` 나열 형식을 쓰지 않고, 오간 질문·답변을 해당 소주제 서술 안에 자연스러운 문장으로 녹여 정리합니다(예: "이에 대해 한 청중이 ~라고 질문했고, 강사는 ~라고 답함"). 실제 질문이 불분명한데 억지로 만들어내지 않습니다.
+6. Q&A 포착 — 강의 중 청중과의 질의응답이 있었다면 반드시 ## Q&A 정리 섹션에 기록합니다. Q&A가 없었으면 해당 섹션을 생략합니다.
+   (v3.0.6 통일 규칙)
+   - STT 원문 그대로 옮기지 말고 핵심을 한·두 문장으로 요약합니다.
+   - Q와 A는 각각 별도 blockquote(>) 줄로 작성합니다.
+   - **Q와 A 사이에는 빈 줄을 두지 않습니다** (붙여 씁니다).
+   - **A와 다음 Q 사이에만 빈 줄 1줄을 둡니다** (Q&A 블록 간 구분).
 
 [강의 녹취록]
 {text}
@@ -792,7 +828,20 @@ class GeminiService {
 
 ## 2. (소주제명)
 
-(소주제 수에 따라 반복. 해당 소주제 중 질의응답이 있었다면 대화 형식이 아닌 서술로 그 안에 녹여 정리)
+(소주제 수에 따라 반복)
+
+---
+
+## Q&A 정리 (강의 중 질의응답이 있었을 경우에만 작성)
+※ Q와 A는 붙여 쓰고, A와 다음 Q 사이에만 빈 줄 1줄.
+
+> **[Q]** (청중 질문 요약)
+> **[A]** (강사 답변 요약)
+
+> **[Q]** (다음 질문 요약)
+> **[A]** (다음 답변 요약)
+
+(Q&A가 없었으면 이 섹션 전체를 생략)
 
 ---
 
@@ -803,10 +852,15 @@ class GeminiService {
 | (용어1) | (설명) |
 
 ---
-강의녹음요약 앱 자동 생성"""
+강의녹음요약 앱 자동 생성
+```
 
-        // ── 요약 프롬프트 - 컨퍼런스 / 간담회 (양식 8, v3.0.4 신설 / v3.0.5 Q&A 줄간격 IR과 동일) ───────────────
-        val SUMMARY_CONFERENCE = """당신은 벤처캐피탈 K-Run Ventures의 전문 행사 노트 작성자입니다.
+## 컨퍼런스/간담회 (conference)
+
+`SUMMARY_CONFERENCE`
+
+```text
+당신은 벤처캐피탈 K-Run Ventures의 전문 행사 노트 작성자입니다.
 아래 전사 내용은 컨퍼런스, 세미나, 포럼, 간담회, 라운드테이블 등 다수 발표자가 등장하는
 외부 행사의 녹취록입니다. 각 발표 세션을 발표자 중심으로 구조화하고, 케이런(VC) 관점의
 인사이트를 추출하여 행사 노트를 작성해주세요.
@@ -830,10 +884,15 @@ class GeminiService {
 4. 인용 출처 명시: 인상적 발언·수치는 어느 발표자가 한 말인지 [발표자명] 태그로 출처 명확화
 5. 케이런 관점 인사이트: "행사 핵심 인사이트" 섹션에 투자·트렌드·시장·네트워킹 시사점 3~5줄 추출.
    단, 본문 세션 정리는 발표자 발언만 사실 기록 (인사이트와 사실 기록을 섞지 말 것)
-6. **패널 토론·Q&A — 대화 형식 금지, 서술로 통합** (있을 경우에만):
-   - 패널 토론·청중 Q&A가 녹취록에 존재할 때만 `### 패널 토론 / 질의응답` 소제목 생성. 존재하지 않으면 소제목 자체를 생략(빈 섹션 만들지 말 것)
-   - `Q [화자]`/`A [화자]` 나열 형식을 쓰지 않고, 오간 질의·응답·이견을 하나의 서술 문단으로 녹여 정리(발언자 확인 시 `[발표자명]` 등으로 출처 표기)
-   - 실제 질문이 분명하지 않은데 억지로 질의응답이 오간 것처럼 창작하지 않음
+6. 패널 토론·Q&A 처리 (있을 경우에만):
+   - 패널 토론·청중 Q&A가 녹취록에 존재할 때만 ### 패널 토론 / Q&A 소제목 생성
+   - 존재하지 않으면 해당 소제목 자체를 생략 (빈 섹션 만들지 말 것)
+   - ❌ STT 원문 그대로 옮기지 말고 → ✅ 각 Q와 A의 핵심을 한·두 문장으로 요약
+   - **Q를 임의로 만들지 말 것**: 실제 질문이 분명하지 않은데 억지로 Q를 생성하지 않음(애매하면 서술형 요약)
+   - 모든 Q&A 빠짐없이 전수 포착 (분량 짧아도 생략 금지)
+   - Q와 A는 각각 별도 blockquote(>) 줄로 작성
+   - **Q와 A 사이에는 빈 줄을 두지 않는다** (붙여 쓴다)
+   - **A와 다음 Q 사이에는 빈 줄 1줄을 둔다** (Q&A 블록 간 구분)
 7. 결정사항 컬럼 없음: 컨퍼런스·간담회는 의사결정 자리가 아니므로 합의·결정 항목을 만들지 않음
 8. 문체: 모든 서술 문장은 "~음" 종결 (예: "강조함", "지적됨", "제시함")
 
@@ -876,9 +935,15 @@ class GeminiService {
 - "(직접 인용 또는 핵심 발언 요약)" — [발표자명]
 - (수치·통계: 출처 발표자 명시)
 
-### 패널 토론 / 질의응답
+### 패널 토론 / Q&A
 ※ 패널 토론 또는 청중 Q&A가 녹취록에 존재할 때만 이 소제목을 생성. 없으면 이 소제목 자체를 출력하지 말 것.
-(오간 질의·응답·이견을 대화체가 아닌 서술 문단으로 통합 정리. 질문자·답변자가 확인되면 인용 형태로 출처 표기)
+※ Q와 A는 붙여 쓰고, A와 다음 Q 사이에만 빈 줄 1줄.
+
+> **Q [청중 또는 좌장]** (질의 핵심 요약)
+> **A [발표자명]** (답변 핵심 요약)
+
+> **Q [청중 또는 좌장]** (다음 질의 핵심 요약)
+> **A [발표자명]** (다음 답변 핵심 요약)
 
 ---
 
@@ -890,17 +955,21 @@ class GeminiService {
 *본 노트는 녹취 텍스트를 기반으로 AI가 자동 작성하였음. 발표자 발언·수치 등 사실관계 확인이 필요한 사항은 추가 검토 바람.*
 
 ---
-회의녹음요약 앱 자동 생성"""
+회의녹음요약 앱 자동 생성
+```
 
-        // ── 요약 프롬프트 - 본당/단체 회의 (비영리·안건 중심) — v3.7.18 신설 ───────────────
-        val SUMMARY_ORG = """당신은 천주교 본당(성당) 상임위원회·단체·학교 등 조직의 공식 회의록 작성자입니다.
-아래 전사 내용은 여러 분과·위원회가 안건별로 보고·협의하는 회의 녹취록입니다.
-분과(안건) 중심으로 구조화하여, 실제 본당 상임위 회의록처럼 **읽는 사람이 각 분과의 한 달 활동·계획·건의사항을 한눈에 파악할 수 있는 서술형 보고서**로 작성하세요.
-(영리·투자 맥락이 아니므로 회사/투자 용어나 'K-Run/케이런' 같은 표현을 임의로 끌어들이지 마세요.)
+## 본당/단체 회의 (org)
+
+`SUMMARY_ORG`
+
+```text
+당신은 비영리 단체·본당(성당)·학교 등 조직의 공식 회의록 작성자입니다.
+아래 전사 내용은 여러 부서·분과·위원회가 안건별로 보고·협의하는 회의 녹취록입니다.
+안건(부서·분과) 중심으로 구조화하여 공식 회의록을 작성하세요. (영리·투자 맥락이 아니므로 회사/투자 용어나 'K-Run/케이런' 같은 표현을 임의로 끌어들이지 마세요.)
 
 [공통 정밀화 규칙 — 반드시 준수]
 1. 사실 충실성: 실제 확인된 사실만 기록. 그럴듯하게 빈칸을 추측으로 채우지 않음. 녹취에 없는 인명·숫자·일자·장소를 지어내지 않으며, 단서가 약하면 적지 않거나 (추정) 표기. 불확실하면 비워 두는 것이 틀리게 채우는 것보다 나음.
-2. 화자 직책 추정 금지: STT 화자 태그는 부정확할 수 있음. "누가 말했는지"는 자기소개·호칭·문맥으로만 판단함. **직책(주임 신부·보좌 신부·위원장·회장·총무 등)은 본인이 그렇게 밝히거나 문맥상 명백할 때만 표기**하고, 불명확하면 [화자1]처럼 번호를 유지하거나 [불명확]으로 둠. 신부/회장 같은 직책을 임의로 단정하지 말 것.
+2. 화자 직책 추정 금지: STT 화자 태그는 부정확할 수 있음. "누가 말했는지"는 자기소개·호칭·문맥으로만 판단함. **직책(주임 신부·위원장·회장·총무 등)은 본인이 그렇게 밝히거나 문맥상 명백할 때만 표기**하고, 불명확하면 [화자1]처럼 번호를 유지하거나 [불명확]으로 둠. 신부/대표/회장 같은 직책을 임의로 단정하지 말 것.
 3. STT 오인식 표기·보정: 인명·기관명·고유명사·숫자가 문맥상 어색하면 원문을 살리되 *(STT 오인식 의심)* 표기. 아래 [도메인 용어집]의 명백한 일반어 오인식만 문맥상 올바른 표현으로 교정함(사람·장소 고유명사는 임의 변경 금지).
 
 [도메인 용어집 — 천주교 본당 회의(해당 시 보정에 활용)]
@@ -908,536 +977,62 @@ class GeminiService {
 - 미사: "목사"로 들리면 → 미사 (천주교엔 '목사' 호칭 없음)
 - 사목/사목회/사목봉사: "사원/사무 봉사"로 들리면 → 사목
 - 장마철("장년철"), 도포("돌파"), 성당("성남/성능") 등 문맥상 명백한 오인식 교정
-- 참고 용어: 전례·성가대·성체·성수·강복·묵주기도·레지오·교무금·교구 공납금·본당·주임신부·보좌신부·분과·위원회·교리실·성소(자)·신심미사·본당의 날
+- 참고 용어: 전례·성가대·성체·성수·강복·묵주기도·레지오·교무금·교구 공납금·본당·주임신부·보좌신부·분과·교리실·성소(자)·신심미사
 ※ 위는 참고용. 명백한 오인식만 교정하고, 확신이 없으면 *(STT 불명확)* 으로 표시.
 
-[작성 원칙 — 실제 본당 상임위 회의록 양식을 따름]
-1. **분과·위원회별 대제목**: 보고 주체(재정위원회·시설관리위원회·여성소공동체·제분과·전례위원회·청소년위원회 등)마다 `## N. OO 보고` 형태의 대제목을 붙이고, 옆에 *(보고: 직책)* 을 이탤릭으로 병기(직책이 확인된 경우만). 안건 수만큼 번호를 이어감.
-2. **하위 구획은 굵은 라벨로 구분**: 각 분과 안에서 "6월 활동" / "7월 계획" / "건의 — 주제" 처럼 **볼드체 소라벨**로 내용을 나누어 서술함(별도 소제목 헤딩(###)을 만들지 말고 굵은 글씨 한 줄 + 이어지는 불릿/문단으로 처리).
-3. **Q&A 형식 절대 금지**: `Q [화자]` / `A [화자]` 같은 질의응답 대화 형식으로 나열하지 않음. 질의·응답·이견·보충 발언이 있으면 그 내용을 요약해 **하나의 blockquote(>) 단락**으로 녹여 서술함 — 발언자가 확인되면 `> **직책 의견**` 처럼 그 사람의 입장을 요약한 문장으로 시작하고, 논의 끝의 합의·결론은 같은 블록 안에 `**결론**: ...` 또는 문장 끝 `→ ...`로 명시. 대화를 주고받은 순서 그대로 옮기지 말고 전체 회의 흐름·논지를 요약해 정리할 것.
-4. **사실·수치 정밀도**: 금액·일자·인원·비율은 정확히. 불확실하면 (추정)
-5. **상세하되 간결한 서술**: 핵심 안건은 배경·경위·수치·결론을 충분히 담되, 각 항목은 불릿 또는 짧은 문단으로 정리(STT 원문을 그대로 옮기지 않고 핵심만 압축). 깨진 구간은 *(STT 불명확)* 표기 후 무리하게 복원하지 않음
-6. **결정사항 명확화**: 합의·결정·보류·재논의 여부를 각 항목 말미에 굵게 또는 화살표(→)로 명시
-7. **문체**: 서술은 "~음" 종결
-8. **회의 요약**은 나열이 아니라 3~5문장의 자연스러운 문단으로, 그 달의 핵심 이슈·수치·결정사항을 **굵게** 강조하며 서술(원문 예시의 문체를 참고)
-9. 마지막 안건 다음에 **폐회** 항목을 두어 마무리 발언(강복 등)을 한 줄로 정리함
+[작성 원칙]
+1. 안건(부서·분과) 중심: 보고 주체별로 대제목(#)을 나누고, 활동·계획·건의·결정을 명확히 기록
+2. 사실·수치 정밀도: 금액·일자·인원 정확히. 불확실하면 (추정)
+3. 상세 서술: 핵심 안건은 배경·경위·수치·결론 포함해 충분히 서술. 깨진 구간은 *(STT 불명확)* 표기 후 무리하게 복원하지 않음
+4. Q&A는 명백할 때만: 질의·응답·이견이 분명할 때만 Q&A로 기록(화자 불명확하면 [화자N]). 추정 Q&A 창작 금지
+   - STT 원문 그대로 옮기지 말고 핵심을 한·두 문장으로 요약
+   - Q와 A는 각각 별도 blockquote(>) 줄, Q-A는 붙여 쓰고 A↔다음 Q만 빈 줄 1줄
+5. 결정사항 명확화: 합의·결정·보류·재논의를 명시
+6. 문체: 서술은 "~음" 종결
 
 [전사 내용]
 {text}
 
 [출력 양식]
-# 본당 (위원회/단체명 — 녹취록에서 식별, 예: 상임위원회) 회의록
+# (회의명 — 녹취록에서 식별, 예: 본당 상임위원회 회의)
 
 | 항목 | 내용 |
 |------|------|
 | 일 시 | {dt} |
-| 회의명 | (녹취록에서 식별, 예: 2026년 O월 본당 상임위원회 회의) |
-| 참 석 | (직책이 자기소개로 확인된 경우만 나열; 그 외에는 "주임·보좌 신부, 각 분과·위원회 위원장 및 담당자" 처럼 개괄) |
+| 장 소 | (식별 가능 시) |
+| 회의명 | (녹취록에서 식별) |
+| 참 석 | (직책은 자기소개로 확인된 경우만 표기; 그 외 인원/부서 개괄) |
 | 작 성 자 | AI 자동 생성 |
 
 ---
 
 ## 회의 요약
-(그 달 각 분과 활동과 다음 달 계획을 개괄하는 3~5문장. 핵심 수치·결정사항은 **굵게**. 문체 "~음". STT 품질 한계로 불명확한 부분이 있었다면 마지막에 괄호로 짧게 명시)
+(목적·주요 안건·결정을 3줄 내외로. 문체 "~음")
 
 ---
 
-## 1. [분과·위원회명] 보고  *(보고: 직책 — 확인된 경우만, 불명확하면 생략)*
+## 주요 안건
 
-**(하위 라벨, 예: 6월 활동)**
-- (보고 내용을 불릿 또는 짧은 문단으로 서술. 금액·일자·수치 정확히)
+# 1. [부서·분과·안건명]
 
-**(하위 라벨, 예: 7월 계획)**
-- (계획 서술)
+**활동/현황**
+(보고 내용 서술. 문체 "~음")
 
-**건의 — (주제)**
-> (제기된 건의·질의와 이에 대한 답변·이견을 대화체가 아닌 요약 문장으로 서술. 발언자 확인 시 `**직책**:`으로 시작)
-> **결론**: (합의·결정·보류·재논의 — 있는 경우)
+**계획/건의**
+(있는 경우)
 
-## 2. [다음 분과·위원회명] 보고
-(분과 수만큼 반복. 소제목은 항상 `## N.` 형식 사용)
+> **Q [화자]** (명백한 질의일 때만 — 추정 금지)
+> **A [화자]** (답변 요약)
 
-## N. 폐회
-**폐회**: (마무리 발언·강복 등을 한 줄로)
+**결정**
+(합의·결정·보류 — 있는 경우)
+
+# 2. [다음 안건]
+(안건 수만큼 반복)
 
 ---
-회의녹음요약 앱 자동 생성"""
+*본 회의록은 STT 전사를 기반으로 AI가 자동 작성함. 화자 직책은 확인된 경우만 표기했고, 불명확 구간은 표시함. 사실관계는 재확인 권장.*
 
-        // ★ v3.7: 음성 메모를 '날짜 인식 액션 아이템'으로 구조화(JSON 출력).
-        // 상대 날짜 표현은 녹음 시점(오늘)을 기준으로 절대 날짜(YYYY-MM-DD)로 변환한다.
-        // 앱이 이 JSON을 파싱해 frontmatter action_items + 사람이 읽는 요약을 만든다.
-        val SUMMARY_VOICE_MEMO = """다음 음성 메모를 분석하여 할 일(액션 아이템)을 추출하고, 각 항목에 해당 날짜를 붙여 JSON으로만 출력해줘.
-
-[기준 날짜]
-오늘은 {today} 이다.
-"오늘/내일/모레/글피", "이번주 ○요일", "다음주 ○요일", "○일 후" 같은 미래 상대 표현과 "어제/그저께/엊그제", "지난주 ○요일", "○일 전" 같은 과거 상대 표현은 모두 반드시 이 기준 날짜로 계산하여 절대 날짜(YYYY-MM-DD)로 변환할 것.
-"7월 3일", "7/3" 처럼 연도가 없는 날짜는 기준 날짜의 연도(또는 이미 지났으면 다음 해)로 보정할 것.
-
-[추출 규칙]
-- 열거 분리(중요): 발화에 "첫째/둘째/셋째", "첫 번째/두 번째", "하나·둘·셋", "①②③", "1. 2. 3." 같은 열거 표현이 있으면 각 항목을 반드시 별도의 action_item 으로 나눈다. 서로 다른 주제(사람·사건·물건)를 절대 한 줄로 합치지 않는다.
-- 음성 메모에서 실제로 해야 할 일·일정·약속, 또는 사용자가 남기려는 각 기록/사건을 액션 아이템으로 추출. 군더더기·잡담·녹음 테스트용 발화("녹음 되나?" 등)는 버린다.
-- 각 액션 아이템의 date(YYYY-MM-DD) 판정:
-  - 일정·약속·부킹 등 특정 날짜에 일어나는 일 → 그 날짜
-  - "N일까지", "N일 전까지" 처럼 마감이 있는 준비 작업 → 사용자가 그 일을 처리/리마인드 받아야 하는 날(=마감일)을 date 로 한다
-    예) "7월 5일 간담회 대비 7월 2일까지 자료 작성" → date="2026-07-02", text="주주간담회 자료 작성 (7/5 간담회 대비)"
-  - 날짜 단서가 전혀 없으면 date=null
-- text: 시간·장소·금액 등 핵심 정보를 포함한 간결한 한 줄(명료한 단문). 녹취에 없는 내용은 추가하지 않는다.
-- summary: 전체 메모의 핵심을 1~2문장으로 압축(액션 아이템이 비어 있을 때 사용).
-
-[출력 형식 — 아래 JSON 한 개만 출력. 코드펜스(```)·설명·머리말 금지]
-{"summary":"핵심 요약","action_items":[{"date":"YYYY-MM-DD 또는 null","text":"할 일 한 줄"}]}
-
-액션 아이템이 없으면 "action_items":[] 로 두고 summary 만 채운다.
-
-[음성 메모]
-{text}
-"""
-    }
-
-    // ── REST API 직접 호출 ──────────────────────────────────────
-
-    /**
-     * ★ v3.2.2: 스트리밍 API(streamGenerateContent)로 전환
-     *
-     * 기존 generateContent (동기식 단일 응답)의 문제점:
-     * - 긴 요약 생성 중 모바일 네트워크 불안정 시 전체 응답 유실
-     * - 서버가 응답을 모두 생성할 때까지 커넥션 idle 상태 → 중간 장비(NAT/프록시)가 끊음
-     *
-     * streamGenerateContent 방식:
-     * - 서버가 텍스트를 조각(chunk)으로 계속 보내므로 커넥션이 계속 활성 상태 유지
-     * - 모바일 네트워크 환경에서 안정성 대폭 향상
-     * - 비정상 중단 시에도 이미 수신된 부분 텍스트 활용 가능
-     */
-    private fun callGeminiApi(
-        model: String,
-        apiKey: String,
-        contents: JsonArray,
-        temperature: Float = 0.3f,
-        maxOutputTokens: Int = 65536,
-        thinkingBudget: Int? = null   // ★ v3.6.1: 0이면 thinking 비활성화(STT 토큰 소진 방지)
-    ): ServiceResult {
-        val trimmedKey = apiKey.trim()
-        // ★ streamGenerateContent + alt=sse → Server-Sent Events 스트리밍
-        val url = "$BASE_URL/$model:streamGenerateContent?alt=sse&key=$trimmedKey"
-
-        val bodyJson = JsonObject().apply {
-            add("contents", contents)
-            add("generationConfig", JsonObject().apply {
-                addProperty("temperature", temperature)
-                addProperty("maxOutputTokens", maxOutputTokens)
-                // ★ v3.6.1: gemini-2.5-flash는 thinking 모델 — STT처럼 출력이 긴 작업에서
-                // thinking 토큰이 maxOutputTokens를 잠식해 응답이 비거나 잘리는 문제가 있음.
-                // thinkingBudget=0으로 thinking을 끄면 전체 토큰을 전사 결과에 사용 가능.
-                if (thinkingBudget != null) {
-                    add("thinkingConfig", JsonObject().apply {
-                        addProperty("thinkingBudget", thinkingBudget)
-                    })
-                }
-            })
-        }
-
-        return try {
-            val request = Request.Builder()
-                .url(url)
-                .addHeader("Content-Type", "application/json")
-                .post(gson.toJson(bodyJson).toRequestBody("application/json".toMediaType()))
-                .build()
-
-            val response = client.newCall(request).execute()
-
-            if (!response.isSuccessful) {
-                val errorBody = response.body?.string() ?: ""
-                return ServiceResult(false, friendlyError(errorBody))
-            }
-
-            // ★ v3.6.1: SSE 스트림을 '라인 단위'로 파싱.
-            // 기존엔 8192바이트씩 읽고 즉시 readUtf8()을 호출해, JSON 한 건이나 UTF-8 멀티바이트
-            // 문자가 읽기 경계에서 쪼개지면 파싱 실패 → 전사 텍스트 유실 문제가 있었음.
-            // readUtf8Line()은 개행이 들어올 때까지 버퍼링하므로 라인/문자가 쪼개지지 않음.
-            val fullText = StringBuilder()
-            var blockReason: String? = null
-            var finishReason: String? = null
-
-            response.body?.let { body ->
-                body.source().use { source ->
-                    while (true) {
-                        val line = source.readUtf8Line() ?: break  // 스트림 종료
-                        if (!line.startsWith("data:")) continue     // SSE data 라인만 처리
-                        val dataLine = line.removePrefix("data:").trim()
-                        if (dataLine.isBlank()) continue
-                        try {
-                            val json = gson.fromJson(dataLine, JsonObject::class.java) ?: continue
-
-                            // 차단 여부 확인
-                            json.getAsJsonObject("promptFeedback")?.get("blockReason")?.asString?.let {
-                                blockReason = it
-                            }
-
-                            val candidates = json.getAsJsonArray("candidates") ?: continue
-                            if (candidates.size() == 0) continue
-                            val candidate = candidates[0]?.asJsonObject ?: continue
-
-                            // 종료 사유 추적 (MAX_TOKENS 등 진단용)
-                            candidate.get("finishReason")?.takeIf { !it.isJsonNull }?.asString?.let {
-                                finishReason = it
-                            }
-
-                            // 텍스트 조각 추출
-                            val parts = candidate
-                                .getAsJsonObject("content")
-                                ?.getAsJsonArray("parts") ?: continue
-                            for (i in 0 until parts.size()) {
-                                parts[i]?.asJsonObject?.get("text")?.asString?.let { text ->
-                                    fullText.append(text)
-                                }
-                            }
-                        } catch (e: Exception) {
-                            // 개별 라인 파싱 실패는 무시 — 다음 라인 계속 처리
-                            Log.w("GeminiService", "SSE line parse skip: ${e.message}")
-                        }
-                    }
-                }
-            }
-
-            if (blockReason != null) {
-                return ServiceResult(false, "Gemini 응답 차단: $blockReason")
-            }
-
-            val resultText = fullText.toString()
-            if (resultText.isBlank()) {
-                // ★ v3.6.1: 빈 응답 원인을 사용자에게 노출 (특히 MAX_TOKENS)
-                val reasonHint = when (finishReason) {
-                    "MAX_TOKENS" -> "\n\n(출력 토큰 한도 초과 — 파일이 너무 길 수 있습니다. 더 짧게 나눠 시도해주세요.)"
-                    "SAFETY", "RECITATION" -> "\n\n(안전/정책 필터로 응답이 차단되었습니다: $finishReason)"
-                    null -> ""
-                    else -> "\n\n(종료 사유: $finishReason)"
-                }
-                return ServiceResult(false, "Gemini 응답이 비어 있습니다.$reasonHint")
-            }
-
-            ServiceResult(true, resultText)
-        } catch (e: java.net.SocketTimeoutException) {
-            Log.e("GeminiService", "Gemini API timeout: ${e.message}", e)
-            ServiceResult(false, "⏰ 서버 응답 시간 초과 (Timeout)\n\n인터넷 연결을 확인하고 다시 시도해주세요.\n긴 회의록의 경우 시간이 더 걸릴 수 있습니다.")
-        } catch (e: java.net.UnknownHostException) {
-            Log.e("GeminiService", "Gemini API DNS error: ${e.message}", e)
-            ServiceResult(false, "🌐 인터넷 연결 없음\n\nWi-Fi 또는 모바일 데이터 연결을 확인해주세요.")
-        } catch (e: java.net.ConnectException) {
-            Log.e("GeminiService", "Gemini API connection refused: ${e.message}", e)
-            ServiceResult(false, "🔌 서버 연결 실패\n\nGoogle 서버에 연결할 수 없습니다.\n잠시 후 다시 시도해주세요.")
-        } catch (e: javax.net.ssl.SSLException) {
-            Log.e("GeminiService", "Gemini API SSL error: ${e.message}", e)
-            ServiceResult(false, "🔒 보안 연결 오류 (SSL)\n\n네트워크 환경을 확인해주세요.\nVPN 사용 시 해제 후 다시 시도해주세요.")
-        } catch (e: java.io.IOException) {
-            Log.e("GeminiService", "Gemini API IO error: ${e.message}", e)
-            ServiceResult(false, "📡 네트워크 오류: ${e.message?.take(100)}\n\n인터넷 연결 상태를 확인해주세요.")
-        } catch (e: Exception) {
-            Log.e("GeminiService", "Gemini API unknown error: ${e.javaClass.simpleName} - ${e.message}", e)
-            ServiceResult(false, "연결 오류 (${e.javaClass.simpleName}): ${e.message?.take(200)}")
-        }
-    }
-
-    private fun makeTextContents(prompt: String): JsonArray {
-        return JsonArray().apply {
-            add(JsonObject().apply {
-                addProperty("role", "user")
-                add("parts", JsonArray().apply {
-                    add(JsonObject().apply {
-                        addProperty("text", prompt)
-                    })
-                })
-            })
-        }
-    }
-
-    // ── 공개 API ────────────────────────────────────────────────
-
-    fun testConnection(apiKey: String): ServiceResult {
-        if (apiKey.isBlank()) return ServiceResult(false, "API 키가 비어 있습니다. 키를 입력하고 '저장'을 먼저 눌러주세요.")
-
-        val contents = makeTextContents("안녕하세요. 테스트입니다. 한 문장으로 답해주세요.")
-
-        // 여러 모델을 순서대로 시도하여 사용 가능한 모델 자동 감지
-        for (model in MODEL_CANDIDATES) {
-            val result = callGeminiApi(model, apiKey, contents, maxOutputTokens = 30)
-            if (result.success) {
-                activeModel = model  // 성공한 모델 저장
-                return ServiceResult(true, "연결 성공! ($model 사용 가능)")
-            }
-        }
-
-        // 모든 모델 실패
-        return ServiceResult(false, "사용 가능한 Gemini 모델을 찾지 못했습니다.\n\n" +
-                "시도한 모델: ${MODEL_CANDIDATES.joinToString(", ")}\n\n" +
-                "API 키: ${apiKey.trim().take(8)}...${apiKey.trim().takeLast(4)}\n\n" +
-                "Google AI Studio(aistudio.google.com)에서 키를 확인해주세요.")
-    }
-
-    fun transcribe(
-        audioFile: File,
-        apiKey: String,
-        numSpeakers: Int = 0,
-        onProgress: ((Int) -> Unit)? = null,
-        onStatus: ((String) -> Unit)? = null
-    ): ServiceResult {
-        if (apiKey.isBlank()) return ServiceResult(false, "Gemini API 키가 없습니다. 설정에서 입력해주세요.")
-        if (!audioFile.exists()) return ServiceResult(false, "파일을 찾을 수 없습니다: ${audioFile.name}")
-
-        onProgress?.invoke(3)
-        onStatus?.invoke("STT 변환 준비 중...")
-
-        // ★ v3.7.2: 긴 오디오를 10분 청크로 분할 — 한 구간의 반복 루프가 전체 전사를 망치지 않도록.
-        //   (35분 회의가 '네. 네.' 루프로 99.5% 손실되던 문제 대응)
-        val workDir = File(audioFile.parentFile ?: audioFile, "_sttchunks")
-        val chunks = AudioChunker.splitByDuration(audioFile, workDir, chunkSec = 600)
-        val isChunked = chunks.size > 1
-        Log.d("GeminiService", "STT 청크 수: ${chunks.size} (chunked=$isChunked)")
-
-        val full = StringBuilder()
-        val failedChunks = mutableListOf<String>()
-        try {
-            for ((idx, chunk) in chunks.withIndex()) {
-                // ★ v3.7.3: 구간별 재시도 + backoff — 무료 한도(429)·일시 네트워크 오류로 중간 구간이
-                //   실패하던 문제 대응. 최대 3회, 2s·5s 대기. 구간 간에도 짧게 대기해 RPM 버스트 회피.
-                var r = GeminiService.ServiceResult(false, "")
-                val maxTry = 3
-                for (attempt in 1..maxTry) {
-                    onStatus?.invoke(
-                        if (isChunked) "Gemini STT 변환 중... (${idx + 1}/${chunks.size} 구간${if (attempt > 1) " · 재시도 ${attempt - 1}" else ""})"
-                        else "Gemini STT 변환 중... (1~10분 소요)"
-                    )
-                    r = transcribeOne(chunk, apiKey, numSpeakers)
-                    if (r.success) break
-                    Log.w("GeminiService", "구간 ${idx + 1} 시도 $attempt 실패: ${r.text.take(160)}")
-                    if (attempt < maxTry) {
-                        try { Thread.sleep(if (attempt == 1) 2000L else 5000L) } catch (_: InterruptedException) {}
-                    }
-                }
-                if (!r.success) {
-                    if (!isChunked) return r  // 단일 파일이면 실패 그대로 반환
-                    val reason = r.text.replace("\n", " ").take(60)
-                    failedChunks.add("구간 ${idx + 1}: $reason")
-                    full.append("\n[구간 ${idx + 1} 전사 실패: $reason]\n")
-                } else {
-                    // 혹시 남은 반복 루프 구간 제거 후 합침
-                    full.append(stripRunawayRepetition(r.text).trim()).append("\n")
-                }
-                onProgress?.invoke((idx + 1) * 95 / chunks.size)
-                // 구간 간 짧은 대기(마지막 제외) — 무료 한도 RPM 버스트 회피
-                if (idx < chunks.size - 1) {
-                    try { Thread.sleep(1500L) } catch (_: InterruptedException) {}
-                }
-            }
-        } finally {
-            if (isChunked) {
-                chunks.forEach { runCatching { it.delete() } }
-                runCatching { workDir.delete() }
-            }
-        }
-        if (failedChunks.isNotEmpty()) {
-            Log.w("GeminiService", "STT 일부 구간 실패(${failedChunks.size}): ${failedChunks.joinToString(" / ")}")
-        }
-
-        val text = full.toString().trim()
-        if (text.isBlank()) return ServiceResult(false, "Gemini STT 결과가 비어 있습니다.")
-        onProgress?.invoke(100)
-        onStatus?.invoke("Gemini STT 변환 완료")
-        return ServiceResult(true, text)
-    }
-
-    /** 단일(청크) 오디오 1개를 전사. 반복 루프 감지 시 높은 temperature 로 1회 재시도. */
-    private fun transcribeOne(audioFile: File, apiKey: String, numSpeakers: Int): ServiceResult {
-        val sizeMb = audioFile.length() / (1024.0 * 1024.0)
-        if (sizeMb > 50) {
-            return ServiceResult(false, "구간 크기(${String.format("%.1f", sizeMb)}MB)가 50MB를 초과합니다.\nCLOVA Speech를 사용해주세요.")
-        }
-        val audioBytes = try {
-            audioFile.readBytes()
-        } catch (e: OutOfMemoryError) {
-            return ServiceResult(false, "메모리 부족(${String.format("%.1f", sizeMb)}MB).\nCLOVA Speech를 사용해주세요.")
-        }
-        val audioBase64 = Base64.encodeToString(audioBytes, Base64.NO_WRAP)
-        val mimeType = when (audioFile.extension.lowercase()) {
-            "mp3" -> "audio/mp3"
-            "wav" -> "audio/wav"
-            "m4a" -> "audio/mp4"
-            "ogg" -> "audio/ogg"
-            "flac" -> "audio/flac"
-            else -> "audio/mp4"
-        }
-        fun build(prompt: String) = JsonArray().apply {
-            add(JsonObject().apply {
-                addProperty("role", "user")
-                add("parts", JsonArray().apply {
-                    add(JsonObject().apply { addProperty("text", prompt) })
-                    add(JsonObject().apply {
-                        add("inline_data", JsonObject().apply {
-                            addProperty("mime_type", mimeType)
-                            addProperty("data", audioBase64)
-                        })
-                    })
-                })
-            })
-        }
-
-        // ★ v3.7.4: 화자 태그 없는 줄글 프롬프트 + temperature 0.4 — 실측으로 반복 루프 없이 정상 전사 확인
-        var result = callGeminiApi(activeModel, apiKey, build(makeSttPrompt(numSpeakers)),
-            temperature = 0.4f, thinkingBudget = 0)
-
-        // 만약 그래도 반복 루프가 감지되면 더 높은 temperature + 강한 반복 금지로 1회 재시도
-        if (result.success && looksDegenerate(result.text)) {
-            Log.w("GeminiService", "STT 반복 루프 감지 — 재시도(temp=0.9)")
-            val retry = callGeminiApi(activeModel, apiKey, build(makeSttPrompt(numSpeakers, strict = true)),
-                temperature = 0.9f, thinkingBudget = 0)
-            result = if (retry.success && !looksDegenerate(retry.text)) retry else result
-        }
-        return result
-    }
-
-    fun summarize(
-        sttText: String,
-        apiKey: String,
-        summaryMode: String = "speaker",
-        customInstruction: String = "",
-        onProgress: ((Int) -> Unit)? = null
-    ): ServiceResult {
-        if (apiKey.isBlank()) return ServiceResult(false, "Gemini API 키가 없습니다.")
-        if (sttText.isBlank()) return ServiceResult(false, "변환된 텍스트가 비어 있습니다.")
-
-        val template = getTemplate(summaryMode)
-        onProgress?.invoke(10)
-
-        val dt = SimpleDateFormat("yyyy년 MM월 dd일 HH:mm", Locale.KOREAN).format(Date())
-        // ★ v3.7: {today} — 음성 메모 날짜 해석용 기준 날짜(요일 포함)
-        val today = SimpleDateFormat("yyyy-MM-dd (EEEE)", Locale.KOREAN).format(Date())
-        var prompt = template.replace("{text}", sttText.take(500000))
-            .replace("{dt}", dt)
-            .replace("{today}", today)
-        if (customInstruction.isNotBlank()) {
-            prompt += "\n\n[추가 지시사항]\n${customInstruction.trim()}"
-        }
-        onProgress?.invoke(30)
-
-        val contents = makeTextContents(prompt)
-        val result = callGeminiApi(activeModel, apiKey, contents, temperature = 0.3f)
-
-        if (result.success) {
-            onProgress?.invoke(100)
-            return ServiceResult(true, trimSummary(result.text))
-        }
-        return result
-    }
-
-    fun extractKeyMetrics(summaryText: String, apiKey: String): ServiceResult {
-        if (apiKey.isBlank()) return ServiceResult(false, "Gemini API 키가 없습니다.")
-        if (summaryText.isBlank()) return ServiceResult(false, "요약 텍스트가 비어 있습니다.")
-
-        val prompt = """다음 회의록 요약에서 핵심 정보를 추출해주세요.
-
-[요약 텍스트]
-${summaryText.take(100000)}
-
-[출력 형식]
-결정사항
-- (결정된 사항 나열, 없으면 "없음")
-
-액션 아이템
-- 담당자: X | 업무: Y | 기한: Z (없으면 "없음")
-
-주요 일정
-- (날짜/기한 포함 일정, 없으면 "없음")
-
-핵심 수치
-- (금액, 기간, 비율 등 주요 숫자, 없으면 "없음")
-
-키워드
-- (3~7개, 쉼표로 구분)"""
-
-        val contents = makeTextContents(prompt)
-        return callGeminiApi(activeModel, apiKey, contents, temperature = 0.2f, maxOutputTokens = 4096)
-    }
-
-    // ── 유틸리티 ────────────────────────────────────────────────
-
-    private fun makeSttPrompt(numSpeakers: Int, strict: Boolean = false): String {
-        // ★ v3.7.4: '화자 태그 금지' 줄글 전사 — 핵심 변경.
-        //   [화자1] 네. [화자2] 네. 처럼 번호 태그가 번갈아 붙는 구조가 반복 루프(degeneration)의
-        //   '뼈대'가 되어, 맞장구가 많은 회의에서 모델이 '네.'를 수만 번 반복해 전사 전체가 손실됐음
-        //   (35분 회의 99.5% 손실). 실측: 화자 태그를 빼면 같은 오디오가 루프 없이 정상 전사됨.
-        //   화자 구분은 요약 단계가 이름·호칭·문맥으로 다시 추론하므로 STT 단계 태그는 불필요.
-        val base = """이 오디오 파일을 한국어로 정확히 전사해주세요.
-
-규칙:
-- 자연스러운 줄글(문단)로 전사한다. 발언이 바뀌면 줄을 바꿔도 된다.
-- ★ [화자1], [화자2] 같은 화자 번호 태그를 절대 사용하지 않는다. 이름·직책이 분명히 들리면 문장 안에 자연스럽게 녹여 적되(예: "김대표가 ~라고 말함" 또는 이름 호명), 태그 형식으로 매 발언 앞에 붙이지 않는다.
-- ★ 맞장구·추임새("네","예","응","어","음","아","그쵸","맞아요","그렇죠")는 전사하지 않고 생략한다. 의미 있는 발화만 적는다.
-- ★ 같은 단어나 문장을 절대 반복해서 출력하지 않는다. 같은 말이 여러 번 들려도 한 번만 적고 바로 다음 내용으로 넘어간다.
-- 들리지 않거나 불명확한 구간은 건너뛰고 다음 의미 있는 발화로 진행한다.
-- 전사 결과만 출력하고 설명 없이 바로 시작한다."""
-        return if (strict) base +
-            "\n- (매우 중요) 직전과 동일한 문장·단어를 반복하지 말 것. 같은 표현이 연속으로 나오려 하면 멈추고 다음 내용으로 넘어간다."
-        else base
-    }
-
-    /** ★ v3.7.2: STT 결과가 반복 루프(degeneration)인지 판정 — 같은 토큰 20회 연속 또는 고유토큰 비율 극히 낮음 */
-    private fun looksDegenerate(text: String): Boolean {
-        val tokens = text.split(Regex("\\s+"))
-            .filter { it.isNotBlank() && !it.matches(Regex("\\[.*\\]")) }
-        if (tokens.size < 40) return false
-        var maxRun = 1; var run = 1
-        for (i in 1 until tokens.size) {
-            if (tokens[i] == tokens[i - 1]) { run++; if (run > maxRun) maxRun = run } else run = 1
-        }
-        val uniqueRatio = tokens.toSet().size.toDouble() / tokens.size
-        return maxRun >= 20 || uniqueRatio < 0.06
-    }
-
-    /** ★ v3.7.2: 반복 루프 구간 절단 — 화자 태그 무시, 동일 내용 토큰이 20회 연속이면 그 지점부터 잘라냄 */
-    private fun stripRunawayRepetition(text: String): String {
-        val toks = text.split(Regex("\\s+")).filter { it.isNotEmpty() }
-        var prev: String? = null
-        var run = 0
-        var firstIdxOfRun = -1
-        var cutAt = -1
-        for (idx in toks.indices) {
-            val t = toks[idx]
-            if (t.matches(Regex("\\[.*\\]"))) continue  // 화자 태그는 카운트 제외
-            if (t == prev) {
-                run++
-                if (run >= 20) { cutAt = firstIdxOfRun; break }
-            } else { prev = t; run = 1; firstIdxOfRun = idx }
-        }
-        if (cutAt < 0) return text
-        val kept = toks.subList(0, cutAt).joinToString(" ").trim()
-        return (kept + " (이하 반복 구간 자동 생략)").trim()
-    }
-
-    private fun getTemplate(mode: String): String = when (mode) {
-        "topic" -> SUMMARY_TOPIC
-        "formal_md" -> SUMMARY_FORMAL_MD
-        "ir_md" -> SUMMARY_IR_MD
-        "phone" -> SUMMARY_PHONE
-        "flow" -> SUMMARY_FLOW
-        "lecture_md" -> SUMMARY_LECTURE_MD
-        "conference" -> SUMMARY_CONFERENCE
-        "org" -> SUMMARY_ORG
-        "voice_memo" -> SUMMARY_VOICE_MEMO
-        else -> SUMMARY_SPEAKER
-    }
-
-    private fun trimSummary(text: String): String {
-        val marker = "회의녹음요약 앱 자동 생성"
-        val idx = text.indexOf(marker)
-        return if (idx != -1) text.substring(0, idx + marker.length).trim() else text.trim()
-    }
-
-    private fun friendlyError(msg: String): String = when {
-        "API_KEY_INVALID" in msg || "API key not valid" in msg -> "API 키가 올바르지 않습니다. 키를 다시 확인해주세요."
-        "UNAUTHENTICATED" in msg || "401" in msg -> "API 인증 실패입니다. 키를 다시 확인해주세요."
-        "PERMISSION_DENIED" in msg || "403" in msg -> "API 키 권한이 없습니다. Google AI Studio에서 확인해주세요."
-        "NOT_FOUND" in msg || "404" in msg -> "모델을 찾을 수 없습니다. 잠시 후 다시 시도해주세요."
-        "429" in msg || "RESOURCE_EXHAUSTED" in msg -> "API 요청 한도 초과입니다. 잠시 후 다시 시도해주세요."
-        "timeout" in msg.lowercase() -> "처리 시간이 초과되었습니다."
-        else -> "Gemini 오류: ${msg.take(300)}"
-    }
-}
+---
+회의녹음요약 앱 자동 생성
+```
