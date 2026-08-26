@@ -89,6 +89,9 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
     var showSumModeSheetA by remember { mutableStateOf(false) }
     var sumModeA by remember { mutableStateOf(btMicConfig.summaryMode) }
 
+    // v4.0.2: 파일 선택 시 "회의녹음요약 앱 녹음" / "통화녹음" 소스를 먼저 고르게 함
+    var showSourceChooser by remember { mutableStateOf(false) }
+
     // ★ v3.11: 통화녹음 원클릭 요약 — 목록 시트 상태
     var showCallPicker by remember { mutableStateOf(false) }
     var callRecordings by remember { mutableStateOf<List<CallRecording>>(emptyList()) }
@@ -204,6 +207,51 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
                 btMicConfig.summaryMode = mode
                 sumModeA = mode
                 showSumModeSheetA = false
+            }
+        )
+    }
+
+    // v4.0.2: 파일 선택 소스 고르기 — "회의녹음요약 앱 녹음" vs "통화녹음(TPhoneCallRecords)"
+    if (showSourceChooser) {
+        AlertDialog(
+            onDismissRequest = { showSourceChooser = false },
+            title = { Text("파일 선택") },
+            text = {
+                Column {
+                    Text(
+                        "어디서 불러올까요?",
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 12.dp)
+                    )
+                    OutlinedButton(
+                        onClick = {
+                            showSourceChooser = false
+                            showAudioPicker = true
+                        },
+                        modifier = Modifier.fillMaxWidth().height(48.dp),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(Icons.Filled.AudioFile, null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("🎙 회의녹음요약 앱 녹음")
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = {
+                            showSourceChooser = false
+                            if (viewModel.hasCallRecordDir()) showCallPicker = true
+                            else callFolderPicker.launch(CallRecordingRepository.initialPickerUri())
+                        },
+                        modifier = Modifier.fillMaxWidth().height(48.dp),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text("📞 통화녹음 (TPhoneCallRecords)")
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showSourceChooser = false }) { Text("취소") }
             }
         )
     }
@@ -660,7 +708,7 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
                                     maxLines = 1)
                             }
                             OutlinedButton(
-                                onClick = { showAudioPicker = true },
+                                onClick = { showSourceChooser = true },
                                 shape = RoundedCornerShape(12.dp)
                             ) {
                                 Icon(Icons.Filled.FolderOpen, null, modifier = Modifier.size(18.dp))
@@ -750,7 +798,7 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
                             OutlinedButton(
                                 onClick = {
                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    showAudioPicker = true
+                                    showSourceChooser = true
                                 },
                                 enabled = !state.isProcessing,
                                 modifier = Modifier.weight(1f).height(44.dp),
