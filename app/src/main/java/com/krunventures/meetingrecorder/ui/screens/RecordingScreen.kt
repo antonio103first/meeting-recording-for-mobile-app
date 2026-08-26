@@ -91,6 +91,8 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
 
     // v4.0.2: 파일 선택 시 "회의녹음요약 앱 녹음" / "통화녹음" 소스를 먼저 고르게 함
     var showSourceChooser by remember { mutableStateOf(false) }
+    // v4.0.4: 통화 목록 안에서 "요약 양식 변경"을 누르면 방식 시트를 띄우고, 닫히면 통화 목록으로 되돌아옴
+    var reopenCallPickerAfterMode by remember { mutableStateOf(false) }
 
     // ★ v3.11: 통화녹음 원클릭 요약 — 목록 시트 상태
     var showCallPicker by remember { mutableStateOf(false) }
@@ -199,14 +201,25 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
     }
 
     // v4.0.1: 요약방식 선택 BottomSheet (녹음/변환 — 파일 선택 옆 버튼에서 호출)
+    // v4.0.4: 통화 목록에서 열었을 경우, 닫힐 때 통화 목록으로 되돌아감(reopenCallPickerAfterMode)
     if (showSumModeSheetA) {
         SummaryModeBottomSheet(
             currentMode = sumModeA,
-            onDismiss = { showSumModeSheetA = false },
+            onDismiss = {
+                showSumModeSheetA = false
+                if (reopenCallPickerAfterMode) {
+                    reopenCallPickerAfterMode = false
+                    showCallPicker = true
+                }
+            },
             onSelect = { mode ->
                 btMicConfig.summaryMode = mode
                 sumModeA = mode
                 showSumModeSheetA = false
+                if (reopenCallPickerAfterMode) {
+                    reopenCallPickerAfterMode = false
+                    showCallPicker = true
+                }
             }
         )
     }
@@ -240,6 +253,8 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
                     OutlinedButton(
                         onClick = {
                             showSourceChooser = false
+                            // v4.0.3: 통화녹음은 기본 전화통화메모로 — 필요하면 옆의 요약방식 버튼으로 바꿀 수 있음
+                            sumModeA = "phone"
                             if (viewModel.hasCallRecordDir()) showCallPicker = true
                             else callFolderPicker.launch(CallRecordingRepository.initialPickerUri())
                         },
@@ -274,14 +289,20 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
         )
     }
 
-    // ★ v3.11: 최근 통화 녹음 목록 (최신순) — 항목을 누르면 즉시 STT + 전화통화 메모 요약
+    // ★ v3.11: 최근 통화 녹음 목록 (최신순) — 항목을 누르면 즉시 STT + 요약(기본 전화통화메모, sumModeA로 변경 가능)
     if (showCallPicker) {
         CallRecordingPickerDialog(
             recordings = callRecordings,
             loading = callLoading,
+            currentMode = sumModeA,
+            onChangeMode = {
+                showCallPicker = false
+                reopenCallPickerAfterMode = true
+                showSumModeSheetA = true
+            },
             onPick = { rec ->
                 showCallPicker = false
-                viewModel.startCallSummary(rec)
+                viewModel.startCallSummary(rec, sumModeA)
             },
             onChangeFolder = {
                 showCallPicker = false
@@ -399,6 +420,8 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
                 val isIdle = state.recordingState == RecordingState.IDLE && !state.isProcessing
                 OutlinedButton(
                     onClick = {
+                        // v4.0.3: 통화녹음은 기본 전화통화메모로 — 필요하면 파일 선택 옆 요약방식 버튼으로 바꿀 수 있음
+                        sumModeA = "phone"
                         if (viewModel.hasCallRecordDir()) showCallPicker = true
                         else callFolderPicker.launch(CallRecordingRepository.initialPickerUri())
                     },
@@ -1869,6 +1892,8 @@ private fun SummaryModeBottomSheet(
 private fun CallRecordingPickerDialog(
     recordings: List<CallRecording>,
     loading: Boolean,
+    currentMode: String,
+    onChangeMode: () -> Unit,
     onPick: (CallRecording) -> Unit,
     onChangeFolder: () -> Unit,
     onDismiss: () -> Unit
@@ -1892,10 +1917,33 @@ private fun CallRecordingPickerDialog(
                 )
                 Spacer(Modifier.height(2.dp))
                 Text(
-                    "최신순 · 누르면 바로 STT + 전화통화 메모 요약",
+                    "최신순 · 누르면 바로 STT + 요약",
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable { onChangeMode() }
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        "🗂 요약 양식: ${summaryModeShortLabel(currentMode)}",
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        "변경",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
                 Spacer(Modifier.height(12.dp))
 
                 when {

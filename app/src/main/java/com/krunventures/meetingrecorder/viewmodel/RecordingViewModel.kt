@@ -136,13 +136,18 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
     //   Obsidian 저장은 00_Inbox, 파일명은 {인물}_YYYYMMDD_전화통화 가 기본값으로 들어간다.
     //   confirmFileName/cancelFileName 이 끝나면 해제된다(다음 녹음에 새지 않도록).
     private var pendingCallRecording: CallRecording? = null
+    // v4.0.3: 통화 요약 양식 — 기본은 phone 이지만, 파일 선택 옆 요약방식 버튼으로 사용자가 바꿀 수 있음
+    private var pendingCallSummaryMode: String = CALL_SUMMARY_MODE
     private val callRepo by lazy { CallRecordingRepository(getApplication()) }
 
-    private fun clearCallContext() { pendingCallRecording = null }
+    private fun clearCallContext() {
+        pendingCallRecording = null
+        pendingCallSummaryMode = CALL_SUMMARY_MODE
+    }
 
-    /** 이번 파이프라인의 요약 양식 — 통화 요약이면 phone 고정, 아니면 설정값 */
+    /** 이번 파이프라인의 요약 양식 — 통화 요약이면 pendingCallSummaryMode(기본 phone), 아니면 설정값 */
     private fun activeSummaryMode(): String =
-        if (pendingCallRecording != null) CALL_SUMMARY_MODE else config.summaryMode
+        if (pendingCallRecording != null) pendingCallSummaryMode else config.summaryMode
 
     /** 이번 파이프라인의 Obsidian 저장 서브폴더 — 통화 요약이면 00_Inbox, 아니면 08_회의록 */
     private fun activeObsidianSubdir(): String =
@@ -624,11 +629,13 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
         callRepo.list(config.callRecordDirUri, config.processedCallRecordings, limit)
 
     /**
-     * 통화녹음 1건을 원클릭으로 STT + 전화통화 메모 요약.
+     * 통화녹음 1건을 원클릭으로 STT + 요약.
      * 회의 파이프라인(runStt → runSummary → 파일명 확인 → 저장)을 그대로 재사용하되,
-     * pendingCallRecording 이 세팅돼 있어 요약 양식(phone)·Obsidian 폴더(00_Inbox)·기본 파일명이 달라진다.
+     * pendingCallRecording 이 세팅돼 있어 Obsidian 폴더(00_Inbox)·기본 파일명이 달라진다.
+     * 요약 양식은 기본 phone(전화통화메모)이지만, [summaryMode]로 사용자가 다른 양식을 지정할 수 있다
+     * (v4.0.3 — 파일 선택 옆 요약방식 버튼에서 지정한 값을 그대로 전달받음).
      */
-    fun startCallSummary(rec: CallRecording) {
+    fun startCallSummary(rec: CallRecording, summaryMode: String = CALL_SUMMARY_MODE) {
         if (_uiState.value.isProcessing) return
         _uiState.value = _uiState.value.copy(
             isProcessing = true,
@@ -657,6 +664,7 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
 
             withContext(Dispatchers.Main) {
                 pendingCallRecording = rec
+                pendingCallSummaryMode = summaryMode
                 currentAudioFile = copied
                 // 음성메모 모드였어도 통화는 회의 파이프라인(STT→요약→파일명 확인)으로 처리한다
                 _uiState.value = _uiState.value.copy(
