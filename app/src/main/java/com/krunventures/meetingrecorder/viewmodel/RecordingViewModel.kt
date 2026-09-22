@@ -34,6 +34,7 @@ data class RecordingUiState(
     val elapsed: String = "00:00:00",
     val amplitude: Float = 0f,
     val currentFile: String = "(없음)",
+    val currentFilePath: String? = null,   // v4.0.5 — 선택한 녹음파일 바로 청취용 전체 경로
     val sttProgress: Int = 0,
     val sttStatus: String = "",
     val sttText: String = "",
@@ -331,7 +332,8 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                     val result = recorderManager.startRecording(config.tempRecordingDir)
                     result.onSuccess { file ->
                         currentAudioFile = file
-                        _uiState.value = _uiState.value.copy(currentFile = file.name)
+                        // 녹음 중인 파일이 재생용 경로로 잘못 잡히지 않도록 비운다(파일 선택 플로우 전용)
+                        _uiState.value = _uiState.value.copy(currentFile = file.name, currentFilePath = null)
                     }
                     result.onFailure { e ->
                         _uiState.value = _uiState.value.copy(error = e.message)
@@ -385,6 +387,7 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
             currentAudioFile = file
             _uiState.value = _uiState.value.copy(
                 currentFile = file.name,
+                currentFilePath = null,   // 최종 저장 위치는 saveRecordingImmediately에서 별도 경로로 이동됨
                 saveStatus = "녹음 정지 — 파일 저장 중..."
             )
             // ★ V2.0: 녹음파일 즉시 저장 + Google Drive 업로드 (데이터 유실 방지)
@@ -581,7 +584,7 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
     fun setAudioFile(file: File) {
         clearCallContext()
         currentAudioFile = file
-        _uiState.value = _uiState.value.copy(currentFile = file.name)
+        _uiState.value = _uiState.value.copy(currentFile = file.name, currentFilePath = file.absolutePath)
     }
 
     /**
@@ -603,7 +606,7 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
         config.tempRecordingDir.mkdirs()
         tempFile.outputStream().use { inputStream.copyTo(it) }
         currentAudioFile = tempFile
-        _uiState.value = _uiState.value.copy(currentFile = tempFile.name)
+        _uiState.value = _uiState.value.copy(currentFile = tempFile.name, currentFilePath = tempFile.absolutePath)
     }
 
     // ── ★ v3.11: 통화녹음 원클릭 요약 ──────────────────────────
@@ -670,6 +673,7 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                 _uiState.value = _uiState.value.copy(
                     recordingMode = RecordingMode.MEETING,
                     currentFile = rec.fileName,
+                    currentFilePath = null,   // 통화녹음은 바로 자동 처리되므로 미리듣기 대상 아님
                     isProcessing = false,   // startPipeline 이 다시 true 로 세운다
                     sttText = "",
                     summaryText = "",

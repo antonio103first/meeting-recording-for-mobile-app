@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.krunventures.meetingrecorder.util.MdToPdfConverter
+import com.krunventures.meetingrecorder.util.ShareUtil
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -286,7 +287,7 @@ class MeetingListViewModel(app: Application) : AndroidViewModel(app) {
 
     /**
      * 파일 형태별 공유
-     * @param format "plain_text" | "md_file" | "txt_file" | "with_audio"
+     * @param format "plain_text" | "md_file" | "txt_file" | "with_audio" | "audio_only"
      */
     fun shareByFormat(format: String) {
         val meeting = _uiState.value.targetMeeting ?: return
@@ -295,6 +296,11 @@ class MeetingListViewModel(app: Application) : AndroidViewModel(app) {
 
         try {
             when (format) {
+                "audio_only" -> {
+                    // v3.12.0: 녹음파일(MP3)만 카톡/슬랙 등으로 보내기
+                    shareAudioFile(meeting)
+                }
+
                 "plain_text" -> {
                     // Plain text — 텍스트 내용을 직접 공유 (파일 첨부 없음)
                     val text = buildString {
@@ -766,6 +772,15 @@ class MeetingListViewModel(app: Application) : AndroidViewModel(app) {
                     _uiState.value = _uiState.value.copy(statusMessage = "스캔 실패: ${e.message?.take(100)}")
                 }
             }
+        }
+    }
+
+    /** v3.12.0: 녹음파일(MP3/M4A)만 외부 앱으로 보내기 — MP3 탭 📤 버튼 / 공유 시트 공용 */
+    fun shareAudioFile(meeting: Meeting) {
+        val context = getApplication<Application>()
+        val err = ShareUtil.shareAudio(context, meeting.mp3LocalPath, meeting.fileName.ifEmpty { null })
+        if (err != null) {
+            _uiState.value = _uiState.value.copy(statusMessage = err)
         }
     }
 

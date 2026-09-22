@@ -47,7 +47,10 @@ import com.krunventures.meetingrecorder.service.CallRecording
 import com.krunventures.meetingrecorder.service.CallRecordingRepository
 import com.krunventures.meetingrecorder.service.CallState
 import com.krunventures.meetingrecorder.service.RecordingState
+import com.krunventures.meetingrecorder.ui.components.MiniAudioPlayerRow
+import com.krunventures.meetingrecorder.ui.components.rememberAudioPlayerState
 import com.krunventures.meetingrecorder.ui.theme.*
+import com.krunventures.meetingrecorder.util.ShareUtil
 import com.krunventures.meetingrecorder.viewmodel.RecordingMode
 import com.krunventures.meetingrecorder.viewmodel.RecordingViewModel
 import kotlinx.coroutines.Dispatchers
@@ -84,6 +87,9 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
     // ★ v3.6.1: 인앱 파일 선택 다이얼로그(최신 날짜순) 표시 상태
     var showAudioPicker by remember { mutableStateOf(false) }
     var showSttPicker by remember { mutableStateOf(false) }
+
+    // v4.0.5: 선택한 녹음파일 바로 청취
+    val filePreviewPlayer = rememberAudioPlayerState()
 
     // v4.0.1: 요약 방식 선택을 설정 탭에서 파일 선택 버튼 옆으로 이동
     var showSumModeSheetA by remember { mutableStateOf(false) }
@@ -619,6 +625,7 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
                                 FilledTonalButton(
                                     onClick = {
                                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        filePreviewPlayer.release()   // 녹음 시작 시 미리듣기 재생 중지(마이크 충돌 방지)
                                         viewModel.startRecording()
                                     },
                                     modifier = Modifier.height(52.dp),
@@ -738,6 +745,23 @@ fun RecordingScreen(viewModel: RecordingViewModel) {
                                 Spacer(Modifier.width(4.dp))
                                 Text("파일 선택", fontSize = 13.sp)
                             }
+                        }
+
+                        // v4.0.5: 파일을 고르면 바로 청취 가능 — STT 변환 전 내용 확인용
+                        val previewPath = state.currentFilePath
+                        if (!previewPath.isNullOrBlank()) {
+                            Spacer(Modifier.height(6.dp))
+                            MiniAudioPlayerRow(
+                                path = previewPath,
+                                player = filePreviewPlayer,
+                                accentColor = MaterialTheme.colorScheme.primary,
+                                textLightColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                onShare = {   // v3.12.0: 선택한 녹음파일을 카톡/슬랙 등으로 바로 보내기
+                                    ShareUtil.shareAudio(recCtx, previewPath)?.let { err ->
+                                        Toast.makeText(recCtx, err, Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            )
                         }
                     }
                 }

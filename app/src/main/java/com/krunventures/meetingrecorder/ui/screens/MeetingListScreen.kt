@@ -30,6 +30,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.krunventures.meetingrecorder.data.Meeting
+import com.krunventures.meetingrecorder.ui.components.MiniAudioPlayerRow
+import com.krunventures.meetingrecorder.ui.components.rememberAudioPlayerState
 import com.krunventures.meetingrecorder.ui.theme.*
 import com.krunventures.meetingrecorder.viewmodel.MeetingListViewModel
 
@@ -42,6 +44,9 @@ fun MeetingListScreen(viewModel: MeetingListViewModel) {
 
     // ★ 상단 탭 상태: 0=녹음파일MP3, 1=STT변환, 2=회의록(요약)
     var selectedTab by remember { mutableIntStateOf(2) }
+
+    // v4.0.5: 목록에서 회의 녹음파일을 선택하면 바로 청취 — 리스트 전체에서 한 번에 하나만 재생
+    val audioPlayer = rememberAudioPlayerState()
 
     // 전체화면 다이얼로그 상태
     var showFullScreen by remember { mutableStateOf(false) }
@@ -150,7 +155,12 @@ fun MeetingListScreen(viewModel: MeetingListViewModel) {
                                                 fullScreenType = "summary"
                                                 showFullScreen = true
                                             }
-                                            else -> { /* MP3 탭은 클릭 시 별도 동작 없음 */ }
+                                            // v4.0.5: MP3 탭에서 항목을 선택하면 바로 재생/일시정지 토글
+                                            else -> if (meeting.mp3LocalPath.isNotBlank() &&
+                                                java.io.File(meeting.mp3LocalPath).exists()
+                                            ) {
+                                                audioPlayer.toggle(meeting.mp3LocalPath)
+                                            }
                                         }
                                     },
                                     onLongClick = { viewModel.showActionMenu(meeting) }
@@ -223,6 +233,17 @@ fun MeetingListScreen(viewModel: MeetingListViewModel) {
                                                     Icon(Icons.Filled.Error, null,
                                                         modifier = Modifier.size(20.dp), tint = Danger)
                                                 }
+                                            }
+                                            // v4.0.5: 항목을 선택(탭)하면 바로 재생 — 아래는 재생 컨트롤(일시정지·탐색)
+                                            if (exists) {
+                                                Spacer(Modifier.height(4.dp))
+                                                MiniAudioPlayerRow(
+                                                    path = meeting.mp3LocalPath,
+                                                    player = audioPlayer,
+                                                    accentColor = Accent,
+                                                    textLightColor = TextLight,
+                                                    onShare = { viewModel.shareAudioFile(meeting) }   // v3.12.0 카톡/슬랙 보내기
+                                                )
                                             }
                                         } else {
                                             Text("녹음 파일 없음", fontSize = 12.sp, color = TextLight)
@@ -948,6 +969,16 @@ private fun ShareBottomSheet(
                     modifier = Modifier.fillMaxWidth().height(48.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF5C6BC0))
                 ) { Text("녹음포함 (회의록 + MP3)", fontSize = 14.sp) }
+
+                // v3.12.0: 녹음파일만 보내기 (카톡/슬랙/메일)
+                val hasAudio = meeting.mp3LocalPath.isNotBlank() &&
+                    (meeting.mp3LocalPath.startsWith("content://") || java.io.File(meeting.mp3LocalPath).exists())
+                Button(
+                    onClick = { viewModel.shareByFormat("audio_only") },
+                    enabled = hasAudio,
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF16A085))
+                ) { Text(if (hasAudio) "녹음파일만 (MP3) — 카톡/슬랙 보내기" else "녹음파일 없음", fontSize = 14.sp) }
             }
 
             Spacer(Modifier.height(20.dp))
