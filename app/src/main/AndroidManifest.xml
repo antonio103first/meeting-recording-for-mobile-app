@@ -1,6 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- ★ v3.13: AI 요약 창구 — 같은 서명 앱(통합검색)만 사용 가능 -->
+    <permission
+        android:name="com.krunventures.meetingrecorder.permission.AI_GATEWAY"
+        android:label="회의녹음 앱 AI 요약 사용"
+        android:protectionLevel="signature" />
+
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- ★ v3.10: 차량/블루투스 마이크(SCO) 사용 — 오디오 라우팅 변경용 (normal 권한, 런타임 팝업 없음) -->
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
@@ -52,6 +58,13 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
+
+        <!-- ★ v3.13: AI 요약 창구 (호출될 때만 실행, 상시 실행 없음) -->
+        <provider
+            android:name=".service.AiGatewayProvider"
+            android:authorities="com.krunventures.meetingrecorder.ai"
+            android:exported="true"
+            android:permission="com.krunventures.meetingrecorder.permission.AI_GATEWAY" />
 
         <receiver
             android:name=".widget.RecordingWidget"

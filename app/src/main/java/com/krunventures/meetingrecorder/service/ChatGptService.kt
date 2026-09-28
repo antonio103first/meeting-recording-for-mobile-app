@@ -174,6 +174,7 @@ class ChatGptService {
             "lecture_md" -> GeminiService.SUMMARY_LECTURE_MD
             "conference" -> GeminiService.SUMMARY_CONFERENCE
             "org" -> GeminiService.SUMMARY_ORG
+            "raw" -> "{text}" // ★ v3.13: AI 창구 — 프롬프트 그대로
             else -> GeminiService.SUMMARY_SPEAKER
         }
 

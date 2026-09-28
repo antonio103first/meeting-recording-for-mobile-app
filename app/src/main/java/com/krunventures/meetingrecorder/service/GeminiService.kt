@@ -1489,6 +1489,7 @@ ${summaryText.take(100000)}
         "conference" -> SUMMARY_CONFERENCE
         "org" -> SUMMARY_ORG
         "voice_memo" -> SUMMARY_VOICE_MEMO
+        "raw" -> "{text}" // ★ v3.13: AI 창구(AiGatewayProvider) — 호출 앱이 보낸 프롬프트 그대로
         else -> SUMMARY_SPEAKER
     }
 

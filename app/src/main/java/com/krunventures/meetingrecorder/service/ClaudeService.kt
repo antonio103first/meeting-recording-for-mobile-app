@@ -78,6 +78,7 @@ class ClaudeService {
             "conference" -> GeminiService.SUMMARY_CONFERENCE
             "org" -> GeminiService.SUMMARY_ORG
             "voice_memo" -> GeminiService.SUMMARY_VOICE_MEMO
+            "raw" -> "{text}" // ★ v3.13: AI 창구 — 프롬프트 그대로
             else -> GeminiService.SUMMARY_SPEAKER
         }
 

@@ -4,6 +4,24 @@
 
 ---
 
+## [v3.13.0] — 2026-09-28
+
+### 추가 (Added)
+- **AI 요약 창구 `AiGatewayProvider`** — 같은 서명의 앱(통합검색 앱 `com.krunventures.peoplefinder`)이 이 앱에 설정된 AI 엔진(Gemini/Claude/GPT-4o)·API 키로 텍스트를 요약하게 하는 `ContentProvider.call()` 창구 (`content://com.krunventures.meetingrecorder.ai`)
+  - 메서드 `status`(엔진·키 유무) / `summarize`(extras `prompt` → 결과 `text` 또는 `error`)
+  - 커스텀 권한 `com.krunventures.meetingrecorder.permission.AI_GATEWAY` (`protectionLevel="signature"`) — 같은 키로 서명된 앱만 호출 가능. adb shell 등 권한 없는 호출은 `Permission Denial` 로 거부됨을 실기기 확인
+  - 상시 실행 없음: 호출될 때만 시스템이 프로세스를 띄움 (배터리 영향 없음)
+- 세 엔진 `summarize()` 에 `raw` 양식 추가 — 템플릿 없이 호출 앱이 보낸 프롬프트 그대로 전달 (기존 요약 양식 영향 없음)
+
+### 변경 (Changed)
+- versionCode 51→52, versionName 3.12.0→3.13.0
+
+### 검증
+- 실기기(SM-S938N) `adb install -r` 업데이트 — 기존 설정·API 키 유지
+- 통합검색 앱 → 창구 → Gemini 요약 성공 (`AiGateway: summarize by com.krunventures.peoplefinder via Gemini ok=true 16139ms`)
+
+---
+
 ## [v3.6.0] — 2026-06-27
 
 ### 추가 (Added)
