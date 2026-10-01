@@ -1745,7 +1745,7 @@ private fun IncomingCallOverlay(
  * 요약방식 선택 BottomSheet — 재요약 실행 시 표시
  */
 // v4.0.1: 파일 선택 옆 요약방식 버튼에 표시할 짧은 라벨
-private fun summaryModeShortLabel(mode: String): String = when (mode) {
+internal fun summaryModeShortLabel(mode: String): String = when (mode) {
     "topic" -> "다자간협의"
     "formal_md" -> "업무미팅"
     "ir_md" -> "IR미팅"
@@ -1760,10 +1760,12 @@ private fun summaryModeShortLabel(mode: String): String = when (mode) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SummaryModeBottomSheet(
+internal fun SummaryModeBottomSheet(
     currentMode: String,
     onDismiss: () -> Unit,
-    onSelect: (String) -> Unit
+    onSelect: (String) -> Unit,
+    confirmLabel: String = "요약 실행",   // v3.14: 정밀 재변환 다이얼로그에서 '이 양식 선택'으로 재사용
+    subtitle: String = "선택한 방식으로 STT 텍스트를 다시 요약합니다."
 ) {
     var selectedMode by remember { mutableStateOf(currentMode) }
     val sheetState = rememberModalBottomSheetState()
@@ -1788,7 +1790,7 @@ private fun SummaryModeBottomSheet(
             )
             Spacer(Modifier.height(4.dp))
             Text(
-                "선택한 방식으로 STT 텍스트를 다시 요약합니다.",
+                subtitle,
                 fontSize = 13.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -1897,7 +1899,7 @@ private fun SummaryModeBottomSheet(
                 ) {
                     Icon(Icons.Filled.PlayArrow, null, modifier = Modifier.size(20.dp))
                     Spacer(Modifier.width(6.dp))
-                    Text("요약 실행", fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                    Text(confirmLabel, fontSize = 15.sp, fontWeight = FontWeight.Bold)
                 }
             }
 

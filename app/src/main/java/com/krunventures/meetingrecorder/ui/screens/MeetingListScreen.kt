@@ -9,6 +9,8 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -34,13 +36,18 @@ import com.krunventures.meetingrecorder.ui.components.MiniAudioPlayerRow
 import com.krunventures.meetingrecorder.ui.components.rememberAudioPlayerState
 import com.krunventures.meetingrecorder.ui.theme.*
 import com.krunventures.meetingrecorder.viewmodel.MeetingListViewModel
+import com.krunventures.meetingrecorder.viewmodel.RecordingViewModel
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun MeetingListScreen(viewModel: MeetingListViewModel) {
+fun MeetingListScreen(viewModel: MeetingListViewModel, recordingVm: RecordingViewModel? = null) {
     val meetings by viewModel.meetings.collectAsState(initial = emptyList())
     val state by viewModel.uiState.collectAsState()
     val context = LocalContext.current
+
+    // ★ v3.14.0: 🔬 정밀 재변환 — 파이프라인 상태는 RecordingViewModel(isProcessing 공유 → 화면 꺼짐 방지)
+    val recState = recordingVm?.uiState?.collectAsState()?.value
+    var preciseTarget by remember { mutableStateOf<Meeting?>(null) }
 
     // ★ 상단 탭 상태: 0=녹음파일MP3, 1=STT변환, 2=회의록(요약)
     var selectedTab by remember { mutableIntStateOf(2) }
@@ -119,6 +126,20 @@ fun MeetingListScreen(viewModel: MeetingListViewModel) {
             }
 
             Spacer(Modifier.height(8.dp))
+
+            // ★ v3.14.0: 정밀 재변환 진행/결과 표시
+            if (recordingVm != null && recState != null &&
+                (recState.preciseRunning || recState.preciseResult.isNotBlank())) {
+                PreciseRedoStatusCard(
+                    running = recState.preciseRunning,
+                    status = recState.preciseStatus,
+                    progress = recState.preciseProgress,
+                    result = recState.preciseResult,
+                    failed = recState.preciseFailed,
+                    onClose = { recordingVm.clearPreciseResult() }
+                )
+                Spacer(Modifier.height(8.dp))
+            }
 
             if (meetings.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -356,7 +377,29 @@ fun MeetingListScreen(viewModel: MeetingListViewModel) {
             onSpeakerEdit = { viewModel.showSpeakerDialog() },
             onDelete = { viewModel.showDeleteDialog() },
             onDeleteFilesOnly = { viewModel.deleteFilesOnly() },
-            onDismiss = { viewModel.dismissActionMenu() }
+            onDismiss = { viewModel.dismissActionMenu() },
+            onPreciseRedo = if (recordingVm != null) {
+                {
+                    preciseTarget = state.targetMeeting
+                    viewModel.dismissActionMenu()
+                }
+            } else null
+        )
+    }
+
+    // === ★ v3.14.0: 🔬 정밀 재변환 다이얼로그 ===
+    val pt = preciseTarget
+    if (pt != null && recordingVm != null) {
+        PreciseRedoDialog(
+            meeting = pt,
+            hasAudio = recordingVm.hasAudioForPrecise(pt),
+            initialMode = recordingVm.guessSummaryMode(pt),
+            busy = recState?.isProcessing == true,
+            onDismiss = { preciseTarget = null },
+            onRun = { ctx, useAudio, mode ->
+                preciseTarget = null
+                recordingVm.startPreciseRedo(pt, ctx, useAudio, mode)
+            }
         )
     }
 
@@ -809,7 +852,8 @@ private fun ActionMenuDialog(
     onSpeakerEdit: () -> Unit,
     onDelete: () -> Unit,
     onDeleteFilesOnly: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onPreciseRedo: (() -> Unit)? = null
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -841,6 +885,20 @@ private fun ActionMenuDialog(
                         Icon(Icons.Filled.Edit, null, modifier = Modifier.size(20.dp), tint = Accent)
                         Spacer(Modifier.width(12.dp))
                         Text("이름 변경", fontSize = 15.sp, color = TextDark)
+                    }
+                }
+
+                // ★ v3.14.0: 🔬 정밀 재변환 (음성 또는 기존 STT가 있을 때)
+                if (onPreciseRedo != null && (meeting.mp3LocalPath.isNotBlank() || meeting.sttText.isNotBlank() || meeting.sttLocalPath.isNotBlank())) {
+                    TextButton(onClick = onPreciseRedo, modifier = Modifier.fillMaxWidth()) {
+                        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Text("🔬", fontSize = 18.sp)
+                            Spacer(Modifier.width(12.dp))
+                            Column {
+                                Text("정밀 재변환", fontSize = 15.sp, color = TextDark)
+                                Text("참고 문맥으로 STT 재전사·교정 후 다시 요약 (Gemini)", fontSize = 11.sp, color = TextLight)
+                            }
+                        }
                     }
                 }
 
@@ -982,6 +1040,142 @@ private fun ShareBottomSheet(
             }
 
             Spacer(Modifier.height(20.dp))
+        }
+    }
+}
+
+
+// ════════════════════════════════════════════════════════
+// ★ v3.14.0: 🔬 정밀 재변환 UI
+// ════════════════════════════════════════════════════════
+
+@Composable
+private fun PreciseRedoDialog(
+    meeting: Meeting,
+    hasAudio: Boolean,
+    initialMode: String,
+    busy: Boolean,
+    onDismiss: () -> Unit,
+    onRun: (context: String, useAudio: Boolean, summaryMode: String) -> Unit
+) {
+    var ctxText by remember { mutableStateOf("") }
+    var useAudio by remember { mutableStateOf(hasAudio) }
+    var mode by remember { mutableStateOf(initialMode) }
+    var showModeSheet by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("🔬 정밀 재변환", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                Text(
+                    meeting.fileName.ifEmpty { "제목 없음" },
+                    fontSize = 13.sp, color = TextLight, maxLines = 1, overflow = TextOverflow.Ellipsis
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "① 정밀 STT(5분 구간) → ② 문맥 교정 → ③ 정밀 요약. 엔진은 Gemini 고정이며, " +
+                        "결과는 '_정밀STT' / '_정밀요약' 이름으로 새로 저장됩니다(기존 파일 보존).",
+                    fontSize = 12.sp, color = TextLight, lineHeight = 17.sp
+                )
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = ctxText,
+                    onValueChange = { ctxText = it },
+                    label = { Text("참고 문맥 (선택)") },
+                    placeholder = { Text("참석자 이름·직함, 회사/단체명, 전문용어, 회의 배경", fontSize = 13.sp) },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp),
+                    minLines = 4,
+                    maxLines = 10
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(
+                        checked = useAudio && hasAudio,
+                        onCheckedChange = { useAudio = it },
+                        enabled = hasAudio
+                    )
+                    Text(
+                        "음성으로 다시 변환(5분 구간)",
+                        fontSize = 14.sp,
+                        color = if (hasAudio) TextDark else TextLight
+                    )
+                }
+                if (!hasAudio) {
+                    Text(
+                        "음성 파일이 없어 기존 STT를 교정합니다",
+                        fontSize = 12.sp, color = Warning,
+                        modifier = Modifier.padding(start = 12.dp)
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(onClick = { showModeSheet = true }, modifier = Modifier.fillMaxWidth()) {
+                    Text("🗂 요약 양식: ${summaryModeShortLabel(mode)} · 변경", fontSize = 14.sp)
+                }
+                if (busy) {
+                    Spacer(Modifier.height(8.dp))
+                    Text("다른 STT/요약 작업이 진행 중입니다. 끝난 뒤 실행해주세요.", fontSize = 12.sp, color = Danger)
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onRun(ctxText.trim(), useAudio && hasAudio, mode) },
+                enabled = !busy,
+                colors = ButtonDefaults.buttonColors(containerColor = Accent)
+            ) { Text("실행") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("취소") } }
+    )
+
+    if (showModeSheet) {
+        SummaryModeBottomSheet(
+            currentMode = mode,
+            onDismiss = { showModeSheet = false },
+            onSelect = { m -> mode = m; showModeSheet = false },
+            confirmLabel = "이 양식 선택",
+            subtitle = "정밀 요약에 사용할 양식을 고르세요. (기본값: 이 회의의 원래 양식)"
+        )
+    }
+}
+
+@Composable
+private fun PreciseRedoStatusCard(
+    running: Boolean,
+    status: String,
+    progress: Int,
+    result: String,
+    failed: Boolean,
+    onClose: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(10.dp),
+        color = when {
+            running -> Accent.copy(alpha = 0.08f)
+            failed -> Danger.copy(alpha = 0.08f)
+            else -> Success.copy(alpha = 0.10f)
+        }
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            if (running) {
+                Text("🔬 정밀 재변환 진행 중", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = TextDark)
+                Spacer(Modifier.height(4.dp))
+                Text(status, fontSize = 12.sp, color = TextDark)
+                Spacer(Modifier.height(6.dp))
+                LinearProgressIndicator(
+                    progress = { progress / 100f },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = Accent
+                )
+                Spacer(Modifier.height(4.dp))
+                Text("처리 중에는 화면이 꺼지지 않습니다. 앱을 닫지 말아주세요.", fontSize = 11.sp, color = TextLight)
+            } else {
+                Text(result, fontSize = 12.sp, color = if (failed) Danger else TextDark, lineHeight = 17.sp)
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onClose) { Text("닫기") }
+                }
+            }
         }
     }
 }

@@ -14,8 +14,8 @@ android {
         applicationId = "com.krunventures.meetingrecorder"
         minSdk = 26
         targetSdk = 35
-        versionCode = 52
-        versionName = "3.13.0"
+        versionCode = 53
+        versionName = "3.14.0"
     }
 
     buildTypes {
@@ -52,6 +52,8 @@ android {
 }
 
 dependencies {
+    // ★ v3.14.0: JVM 단위 테스트 (SttLoopGuardTest)
+    testImplementation("junit:junit:4.13.2")
     // Compose BOM — Android 16 호환 버전
     val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
     implementation(composeBom)

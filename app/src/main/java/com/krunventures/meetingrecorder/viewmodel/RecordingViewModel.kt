@@ -62,7 +62,13 @@ data class RecordingUiState(
     val recordingMode: RecordingMode = RecordingMode.MEETING,
     // ★ v3.7.9: 음성메모 파이프라인(STT/요약)이 실패해 중단됐을 때, 같은 녹음으로 이어서 재처리할 수 있는
     //   오디오 파일 경로. 비어 있지 않으면 UI에 "🔁 다시 시도" 진입점을 노출한다.
-    val voiceMemoResumeFile: String = ""
+    val voiceMemoResumeFile: String = "",
+    // ★ v3.14.0: 🔬 정밀 재변환 — 회의목록에서 실행하므로 목록 화면이 이 상태를 표시한다
+    val preciseRunning: Boolean = false,
+    val preciseStatus: String = "",      // ①/②/③ 단계 진행 메시지
+    val preciseProgress: Int = 0,
+    val preciseResult: String = "",      // 완료/실패 결과 메시지(닫기 전까지 표시)
+    val preciseFailed: Boolean = false
 )
 
 class RecordingViewModel(app: Application) : AndroidViewModel(app) {
@@ -1704,6 +1710,224 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
             resummarizeStatus = ""
         )
         loadedSttFile = null
+    }
+
+    // ── ★ v3.14.0: 🔬 정밀 재변환 ─────────────────────────────────
+    //   기획서: 회의녹음요약/docs/기획서_정밀재변환.md (PC v4.1.0 과 동일 흐름·프롬프트)
+    //   ① 정밀 STT(음성 있을 때, 5분 구간 + 참고 문맥) → ② 문맥 교정 → ③ 정밀 요약. 엔진은 Gemini 고정.
+    //   결과는 {원래이름}_정밀STT / {원래이름}_정밀요약 으로 '새로' 저장(기존 파일 덮어쓰지 않음),
+    //   DB 해당 레코드는 새 STT·요약으로 갱신.
+
+    /** 회의 레코드의 원래 이름(오디오 확장자 제거) */
+    fun meetingBaseName(meeting: Meeting): String {
+        val n = meeting.fileName.ifBlank { "회의록" }
+        val ext = n.substringAfterLast('.', "").lowercase()
+        return if (ext in setOf("mp3", "m4a", "wav", "aac", "ogg", "flac", "txt", "md")) n.substringBeforeLast('.') else n
+    }
+
+    /** 그 회의의 원래 요약 양식 추정 — 파일명 끝의 양식 라벨(FileManager.getModeLabel 등)로 판별, 없으면 설정 기본값 */
+    fun guessSummaryMode(meeting: Meeting): String {
+        val base = meetingBaseName(meeting)
+        val labels = listOf(
+            "topic" to listOf("다자간협의", "회의록"),
+            "formal_md" to listOf("회의록업무", "업무미팅"),
+            "ir_md" to listOf("IR미팅"),
+            "phone" to listOf("전화메모", "전화통화메모", "전화통화"),
+            "flow" to listOf("네트워킹", "티타임"),
+            "lecture_md" to listOf("강의요약"),
+            "conference" to listOf("컨퍼런스"),
+            "org" to listOf("단체회의"),
+            "speaker" to listOf("주간회의")
+        )
+        // 긴 라벨부터 비교('회의록업무'가 '회의록'보다 먼저 잡히도록)
+        val flat = labels.flatMap { (mode, ls) -> ls.map { it to mode } }.sortedByDescending { it.first.length }
+        for ((label, mode) in flat) {
+            if (base.endsWith("_$label") || base.endsWith("($label)")) return mode
+        }
+        return config.summaryMode
+    }
+
+    /** 이 회의에 정밀 STT용 음성 파일이 있는지 */
+    fun hasAudioForPrecise(meeting: Meeting): Boolean =
+        meeting.mp3LocalPath.isNotBlank() && File(meeting.mp3LocalPath).let { it.exists() && it.length() > 0 }
+
+    fun clearPreciseResult() {
+        _uiState.value = _uiState.value.copy(preciseResult = "", preciseFailed = false)
+    }
+
+    fun startPreciseRedo(meeting: Meeting, context: String, useAudio: Boolean, summaryMode: String) {
+        if (_uiState.value.isProcessing) {
+            _uiState.value = _uiState.value.copy(
+                preciseResult = "❌ 다른 작업(STT/요약)이 진행 중입니다. 끝난 뒤 다시 실행해주세요.",
+                preciseFailed = true
+            )
+            return
+        }
+        val apiKey = config.geminiApiKey
+        if (apiKey.isBlank()) {
+            _uiState.value = _uiState.value.copy(
+                preciseResult = "❌ Gemini API 키가 설정되지 않았습니다.\n정밀 재변환은 Gemini 엔진 고정입니다. 설정 탭에서 Gemini API 키를 입력해주세요.",
+                preciseFailed = true
+            )
+            return
+        }
+        val audioFile = if (useAudio && hasAudioForPrecise(meeting)) File(meeting.mp3LocalPath) else null
+
+        _uiState.value = _uiState.value.copy(
+            isProcessing = true,          // MainActivity 가 관찰 → 처리 중 화면 꺼짐 방지 자동 적용
+            preciseRunning = true,
+            preciseStatus = "🔬 정밀 재변환 시작...",
+            preciseProgress = 0,
+            preciseResult = "",
+            preciseFailed = false
+        )
+
+        val setStatus: (String) -> Unit = { s ->
+            viewModelScope.launch(Dispatchers.Main) { _uiState.value = _uiState.value.copy(preciseStatus = s) }
+        }
+        // 전체 진행률: ① 0~40 / ② 40~75 / ③ 75~95 / 저장 95~100 (음성 없으면 ② 0~60, ③ 60~95)
+        fun progressIn(from: Int, to: Int): (Int) -> Unit = { p ->
+            viewModelScope.launch(Dispatchers.Main) {
+                _uiState.value = _uiState.value.copy(preciseProgress = from + (to - from) * p.coerceIn(0, 100) / 100)
+            }
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            acquirePipelineLocks()
+            try {
+                // ── ① 정밀 STT (또는 기존 STT 사용) ──
+                val baseStt: String
+                val sttSourceLabel: String
+                if (audioFile != null) {
+                    val r = geminiService.transcribePrecise(
+                        audioFile = audioFile, apiKey = apiKey, context = context,
+                        numSpeakers = config.getEffectiveNumSpeakers(),
+                        onProgress = progressIn(0, 40), onStatus = setStatus
+                    )
+                    if (!r.success) throw GeminiService.PreciseStepException("① 정밀 STT 실패\n${r.text}")
+                    baseStt = r.text
+                    sttSourceLabel = "Gemini 정밀 STT(5분 구간)"
+                } else {
+                    var existing = meeting.sttText
+                    if (existing.isBlank() && meeting.sttLocalPath.isNotBlank()) {
+                        existing = runCatching { File(meeting.sttLocalPath).readText(Charsets.UTF_8) }.getOrDefault("")
+                    }
+                    if (existing.isBlank()) {
+                        throw GeminiService.PreciseStepException(
+                            "음성 파일도, 기존 STT 텍스트도 없어 정밀 재변환을 할 수 없습니다.")
+                    }
+                    baseStt = existing
+                    sttSourceLabel = "기존 STT"
+                    setStatus("음성 없이 기존 STT를 교정합니다...")
+                }
+
+                // ── ② 문맥 교정 ──
+                val corrected = geminiService.correctTranscript(
+                    sttText = baseStt, apiKey = apiKey, context = context,
+                    onProgress = if (audioFile != null) progressIn(40, 75) else progressIn(0, 60),
+                    onStatus = setStatus
+                )
+
+                // ── ③ 정밀 요약 (기존 양식 템플릿 + 정밀 요약 지시) ──
+                val modeLabel = fileManager.getModeLabel(summaryMode)
+                val instruction = geminiService.preciseSummaryInstruction(context)
+                var summary: Pair<Boolean, String> = Pair(false, "알 수 없는 오류")
+                val maxTry = 3
+                for (attempt in 1..maxTry) {
+                    setStatus("③ 정밀 요약 중 ($modeLabel)..." + if (attempt > 1) " (재시도 ${attempt - 1})" else "")
+                    if (attempt > 1) kotlinx.coroutines.delay(if (attempt == 2) 3000L else 8000L)
+                    summary = geminiService.summarize(
+                        sttText = corrected, apiKey = apiKey, summaryMode = summaryMode,
+                        customInstruction = instruction,
+                        onProgress = if (audioFile != null) progressIn(75, 95) else progressIn(60, 95),
+                        precise = true
+                    ).let { Pair(it.success, it.text) }
+                    if (summary.first) break
+                    if (!isNetworkError(summary.second)) break
+                }
+                if (!summary.first) throw GeminiService.PreciseStepException("③ 정밀 요약 실패\n${summary.second}")
+
+                var summaryText = summary.second
+                val hasCheckSection = summaryText.contains("📌 확인 필요")
+                if (!meeting.speakerMap.isNullOrBlank()) {
+                    summaryText = applySpeakerMap(summaryText, meeting.speakerMap)
+                }
+                summaryText += "\n\n---\n*STT 엔진: $sttSourceLabel + Gemini 문맥 교정 (🔬 정밀 재변환)*"
+
+                // ── 저장 (새 이름, 기존 파일 보존) ──
+                setStatus("💾 저장 중...")
+                val base = meetingBaseName(meeting)
+                val sttName = "${base}_정밀STT"
+                val sumName = "${base}_정밀요약"
+
+                val sttFile = fileManager.saveSttText(corrected, config.sttSaveDir, sttName)
+                val sumFile = fileManager.saveSummaryText(summaryText, config.summarySaveDir, sumName)
+                if (sttFile.isFailure || sumFile.isFailure) {
+                    throw GeminiService.PreciseStepException("로컬 저장 실패: " +
+                        listOfNotNull(sttFile.exceptionOrNull()?.message, sumFile.exceptionOrNull()?.message).joinToString(" / "))
+                }
+
+                val results = mutableListOf("✅로컬")
+                val sttSafUri = config.getSafUriForStt()
+                if (sttSafUri.isNotBlank()) {
+                    results.add(if (config.writeTextToSafDir(corrected, sttSafUri, "$sttName.txt") != null) "✅STT폴더" else "❌STT폴더(권한 만료?)")
+                }
+                val sumSafUri = config.getSafUriForSummary()
+                if (sumSafUri.isNotBlank()) {
+                    results.add(if (config.writeTextToSafDir(summaryText, sumSafUri, "$sumName.txt") != null) "✅회의록폴더" else "❌회의록폴더(권한 만료?)")
+                }
+                val obsidianUri = config.obsidianVaultDir
+                if (obsidianUri.isNotBlank()) {
+                    val ok = try {
+                        config.writeTextToSafSubDir(summaryText, obsidianUri, OBSIDIAN_MEETING_SUBDIR, "$sumName.md") != null
+                    } catch (e: Exception) { Log.e(TAG, "정밀 요약 Obsidian 저장 실패", e); false }
+                    results.add(if (ok) "✅Obsidian" else "❌Obsidian(권한 만료?)")
+                }
+                if (config.driveAutoUpload) {
+                    try {
+                        val drive = GoogleDriveService(getApplication())
+                        val txtFolderId = config.driveTxtFolderId
+                        if (!drive.initFromLastAccount()) {
+                            results.add("❌Drive(미연결: ${drive.diagnoseConnection() ?: "원인 미상"})")
+                        } else if (txtFolderId.isBlank()) {
+                            results.add("⚠️Drive(폴더 미설정)")
+                        } else {
+                            val up = drive.uploadMeetingFiles(null, sttFile.getOrNull(), sumFile.getOrNull(), "", txtFolderId)
+                            results.add("Drive(" + up.entries.joinToString(" ") { (k, v) -> if (v.success) "✅$k" else "❌$k" } + ")")
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "정밀 재변환 Drive 업로드 실패", e)
+                        results.add("❌Drive(${e.message?.take(60)})")
+                    }
+                }
+
+                // DB 갱신 — 목록 항목이 새 STT·요약을 보여주도록 (오디오 경로는 유지)
+                dao.updateFilePaths(meeting.id, meeting.mp3LocalPath,
+                    sttFile.getOrNull()?.absolutePath ?: meeting.sttLocalPath,
+                    sumFile.getOrNull()?.absolutePath ?: meeting.summaryLocalPath)
+                dao.updateSummary(meeting.id, corrected, summaryText, sumFile.getOrNull()?.absolutePath ?: "")
+
+                NotificationHelper.notifySummaryComplete(getApplication(), sumName)
+                updateUiState { it.copy(
+                    isProcessing = false, preciseRunning = false, preciseProgress = 100,
+                    preciseStatus = "",
+                    preciseResult = "🔬 정밀 재변환 완료 — $sumName\n" +
+                        "STT: $sttSourceLabel → 문맥 교정 / 양식: $modeLabel\n" +
+                        "저장: ${results.joinToString(" ")}" +
+                        (if (hasCheckSection) "" else "\n⚠️ 요약에 「📌 확인 필요」 섹션이 없습니다 — 모델이 지시를 따르지 않았을 수 있으니 내용을 직접 확인해주세요."),
+                    preciseFailed = results.any { r -> r.startsWith("❌") } || !hasCheckSection
+                ) }
+            } catch (e: Throwable) {
+                Log.e(TAG, "정밀 재변환 실패", e)
+                updateUiState { it.copy(
+                    isProcessing = false, preciseRunning = false, preciseStatus = "",
+                    preciseResult = "❌ 정밀 재변환 실패 — 기존 STT·회의록은 그대로입니다.\n${e.message?.take(400) ?: e.javaClass.simpleName}",
+                    preciseFailed = true
+                ) }
+            } finally {
+                releasePipelineLocks()
+            }
+        }
     }
 
     fun setRecordingMode(mode: RecordingMode) {

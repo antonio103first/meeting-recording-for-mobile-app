@@ -135,7 +135,7 @@ fun MeetingRecorderApp() {
         Box(modifier = Modifier.padding(padding).background(Background)) {
             when (selectedTab) {
                 0 -> RecordingScreen(recordingVm)
-                1 -> MeetingListScreen(listVm)
+                1 -> MeetingListScreen(listVm, recordingVm)
                 2 -> SettingsScreen(settingsVm, listVm)
             }
         }

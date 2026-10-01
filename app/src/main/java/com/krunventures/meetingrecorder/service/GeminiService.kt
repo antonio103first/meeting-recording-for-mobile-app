@@ -1312,8 +1312,207 @@ class GeminiService {
         return ServiceResult(true, text)
     }
 
-    /** 단일(청크) 오디오 1개를 전사. 반복 루프 감지 시 높은 temperature 로 1회 재시도. */
-    private fun transcribeOne(audioFile: File, apiKey: String, numSpeakers: Int): ServiceResult {
+    // ════════════════════════════════════════════════════════
+    // 🔬 정밀 재변환 (v3.14.0) — 기획서: 회의녹음요약/docs/기획서_정밀재변환.md
+    //   ① 정밀 STT(5분 구간 + 참고 문맥)  ② 문맥 교정  ③ 정밀 요약
+    //   ⚠️ 프롬프트 텍스트는 PC app_dist/gemini_service.py 와 한 글자도 다르지 않게 유지할 것.
+    //   (모바일은 ffmpeg 가 없어 음성 전처리는 생략 — 기존 AudioChunker 분할 그대로 사용)
+    // ════════════════════════════════════════════════════════
+
+    /** 정밀 STT 구간 길이(초) = 5분 */
+    val PRECISE_CHUNK_SEC = 300
+    /** 문맥 교정 블록 크기(자) */
+    val PRECISE_REFINE_CHARS = 12000
+
+    private val PRECISE_STT_ADDON = """
+
+[정밀 전사 모드 — 추가 규칙]
+- 이 구간은 {part}/{total}번째 구간입니다. 구간 앞뒤가 문장 중간에서 잘렸을 수 있으니 들린 그대로 적습니다.
+- 한 단어도 빠뜨리지 말고 들리는 대로 모두 전사합니다. 요약·축약·정리 금지.
+- 숫자(금액·날짜·인원·비율)는 들린 그대로 아라비아 숫자로 적습니다.
+- 아래 [참고 문맥]의 인명·단체명·용어와 발음이 비슷하게 들리면 참고 문맥의 표기를 사용합니다.
+- 잘 들리지 않는 부분은 추측해서 채우지 말고 [불명확: 들린 소리] 형식으로 남깁니다.
+- 화자를 표기할 때는 [참고 문맥]의 이름을 쓰고, 모든 구간에서 같은 사람은 같은 표기를 유지합니다. 누구인지 확신이 없으면 기본 규칙의 표기 방식을 따릅니다.
+- 같은 문장을 반복해서 적지 않습니다(실제로 되풀이해 말한 경우만 적음). 알아듣기 어려운 구간이 이어지면 [불명확] 한 줄로 묶습니다."""
+
+    private val PRECISE_REFINE_PROMPT = """당신은 한국어 회의 녹취록 교정 전문가입니다.
+아래는 음성인식(STT)으로 만든 회의 녹취록의 일부({part}/{total})입니다. 음성인식 오류를 교정해 주세요.
+
+[교정 규칙]
+1. 발음이 비슷해서 잘못 인식된 단어만 문맥에 맞게 고칩니다. (예: "변진 교리"→"견진 교리", "보자 신부님"→"보좌신부님")
+2. 내용을 요약·삭제·재배열하지 않습니다. 줄 수와 화자 태그([화자1], [홍길동] 등)는 그대로 유지합니다.
+3. [참고 문맥]의 인명·단체명·용어 표기를 우선 사용합니다.
+4. 교정이 확실하지 않은 고유명사·숫자는 원문을 두고 바로 뒤에 (?)를 붙입니다.
+5. 도저히 의미를 알 수 없는 구간은 원문을 그대로 둡니다. 새 내용을 지어내지 않습니다.
+6. 설명이나 머리말 없이 교정된 녹취록 본문만 출력합니다.
+
+[참고 문맥]
+{context}
+
+[녹취록]
+{text}"""
+
+    private val PRECISE_SUMMARY_INSTRUCTION = """[정밀 요약 모드 — 반드시 준수]
+1. 이 녹취록은 음성 상태가 좋지 않아 정밀 보정을 거쳤습니다. 녹취에 없는 사실은 절대 추가하지 않습니다.
+2. 문맥으로 바로잡은 인명·숫자·용어 뒤에는 *(추정)*, 끝내 의미를 알 수 없는 부분은 *(STT 불명확)* 을 붙입니다. (?)가 붙은 원문 단어도 같은 방식으로 처리합니다.
+3. 금액·날짜·인원 등 수치가 서로 맞지 않으면(합계 불일치, 같은 일정의 다른 날짜 등) 임의로 한쪽을 고르지 말고 두 값을 모두 적고 확인 필요로 표시합니다.
+4. 결론·결정사항은 녹취에서 실제로 합의가 확인된 것만 적습니다. 근거가 약하면 "논의됨"으로 낮춥니다.
+5. 회의록 맨 끝(STT 엔진 표기 앞)에 아래 섹션을 추가합니다. 확인할 것이 없으면 "- 없음"으로 적습니다.
+
+## 📌 확인 필요
+- [ ] (불확실한 수치·일자·인명과 그 이유를 한 줄씩)"""
+
+    /** 참고 문맥 블록 — 비어 있으면 블록 자체 생략 (PC _context_block 과 동일) */
+    private fun contextBlock(context: String): String {
+        val c = context.trim()
+        return if (c.isNotEmpty()) "\n\n[참고 문맥]\n$c" else ""
+    }
+
+    /** 정밀 STT 구간 프롬프트 추가분 = 정밀 규칙 + (있으면) 참고 문맥. 기존 STT 프롬프트 뒤에 붙는다. */
+    private fun preciseSttSuffix(part: Int, total: Int, context: String): String =
+        PRECISE_STT_ADDON.replace("{part}", part.toString()).replace("{total}", total.toString()) +
+            contextBlock(context)
+
+    /** ③ 정밀 요약 추가 지시 (summarize 의 customInstruction 으로 전달) */
+    fun preciseSummaryInstruction(context: String): String =
+        PRECISE_SUMMARY_INSTRUCTION + contextBlock(context)
+
+    /** 정밀 재변환 단계 실패 — 조용히 원문으로 대체하지 않고 호출자에게 올린다 */
+    class PreciseStepException(message: String) : Exception(message)
+
+    /**
+     * ① 정밀 STT — 기존 청크 분할(AudioChunker)·반복루프 재시도를 재사용하되 구간 5분,
+     *   구간마다 기존 STT 프롬프트 + 정밀 규칙 + 참고 문맥.
+     *   기존 transcribe() 와 달리 한 구간이라도 실패하면 전체 실패로 반환한다(누락된 전사를 '정밀'로 속이지 않음).
+     */
+    fun transcribePrecise(
+        audioFile: File,
+        apiKey: String,
+        context: String,
+        numSpeakers: Int = 0,
+        onProgress: ((Int) -> Unit)? = null,
+        onStatus: ((String) -> Unit)? = null
+    ): ServiceResult {
+        if (apiKey.isBlank()) return ServiceResult(false, "Gemini API 키가 없습니다. 설정에서 입력해주세요.")
+        if (!audioFile.exists()) return ServiceResult(false, "음성 파일을 찾을 수 없습니다: ${audioFile.name}")
+
+        onProgress?.invoke(3)
+        onStatus?.invoke("① 정밀 STT 준비 중 (5분 구간 분할)...")
+        val workDir = File(audioFile.parentFile ?: audioFile, "_precisechunks")
+        val chunks = AudioChunker.splitByDuration(audioFile, workDir, chunkSec = PRECISE_CHUNK_SEC)
+        val isChunked = chunks.size > 1
+        Log.d("GeminiService", "정밀 STT 구간 수: ${chunks.size} (chunked=$isChunked)")
+
+        val full = StringBuilder()
+        try {
+            for ((idx, chunk) in chunks.withIndex()) {
+                val suffix = preciseSttSuffix(idx + 1, chunks.size, context)
+                var r = ServiceResult(false, "")
+                val maxTry = 3
+                for (attempt in 1..maxTry) {
+                    onStatus?.invoke("① 정밀 STT ${idx + 1}/${chunks.size} 구간 변환 중..." +
+                        if (attempt > 1) " (재시도 ${attempt - 1})" else "")
+                    r = transcribeOne(chunk, apiKey, numSpeakers, suffix)
+                    // 반복루프는 transcribeOne 이 재시도(최대 2회)·정리([반복 인식 N회 생략])까지 처리 →
+                    //   여기서는 구간 실패로 보지 않는다(나머지 구간 결과를 살리기 위해, PC 동일)
+                    if (r.success && r.text.isNotBlank()) break
+                    Log.w("GeminiService", "정밀 STT 구간 ${idx + 1} 시도 $attempt 실패: ${r.text.take(160)}")
+                    if (attempt < maxTry) {
+                        try { Thread.sleep(if (attempt == 1) 2000L else 5000L) } catch (_: InterruptedException) {}
+                    }
+                }
+                if (!r.success || r.text.isBlank()) {
+                    return ServiceResult(false,
+                        "정밀 STT ${idx + 1}/${chunks.size} 구간 실패 (3회 시도):\n${r.text.ifBlank { "빈 응답" }}")
+                }
+                full.append(r.text.trim()).append("\n")
+                onProgress?.invoke((idx + 1) * 100 / chunks.size)
+                if (idx < chunks.size - 1) {
+                    try { Thread.sleep(1500L) } catch (_: InterruptedException) {}
+                }
+            }
+        } finally {
+            if (isChunked) {
+                chunks.forEach { runCatching { it.delete() } }
+                runCatching { workDir.delete() }
+            }
+        }
+        val text = full.toString().trim()
+        if (text.isBlank()) return ServiceResult(false, "정밀 STT 결과가 비어 있습니다.")
+        return ServiceResult(true, text)
+    }
+
+    /** 줄 경계를 지키며 limit 자 내외 블록으로 분할 (PC _split_blocks 와 동일 규칙) */
+    private fun splitBlocks(text: String, limit: Int): List<String> {
+        val blocks = mutableListOf<String>()
+        val cur = mutableListOf<String>()
+        var size = 0
+        for (line in text.lines()) {
+            if (cur.isNotEmpty() && size + line.length > limit) {
+                blocks.add(cur.joinToString("\n")); cur.clear(); size = 0
+            }
+            cur.add(line); size += line.length + 1
+        }
+        if (cur.isNotEmpty()) blocks.add(cur.joinToString("\n"))
+        return blocks
+    }
+
+    /**
+     * ② 문맥 교정 — 약 12,000자 블록별로 오인식만 교정(temperature 0.2), 결과를 이어붙인다.
+     *   한 블록이라도 (재시도 후) 실패하면 [PreciseStepException] 을 던진다 — 원문으로 조용히 대체하면
+     *   사용자가 '교정됨'으로 오인하므로 금지. 원문 대비 60% 미만으로 짧아지면 요약된 것으로 보고 실패 처리(PC 동일).
+     */
+    fun correctTranscript(
+        sttText: String,
+        apiKey: String,
+        context: String,
+        onProgress: ((Int) -> Unit)? = null,
+        onStatus: ((String) -> Unit)? = null
+    ): String {
+        if (apiKey.isBlank()) throw PreciseStepException("Gemini API 키가 없습니다.")
+        if (sttText.isBlank()) throw PreciseStepException("교정할 STT 텍스트가 비어 있습니다.")
+        val blocks = splitBlocks(sttText, PRECISE_REFINE_CHARS)
+        val ctx = context.trim().ifEmpty { "(없음)" }
+        val out = mutableListOf<String>()
+        for ((i, block) in blocks.withIndex()) {
+            val prompt = PRECISE_REFINE_PROMPT
+                .replace("{part}", (i + 1).toString())
+                .replace("{total}", blocks.size.toString())
+                .replace("{context}", ctx)
+                .replace("{text}", block)   // 마지막에 치환 — 녹취 본문 속 '{context}' 등 문자열 오염 방지
+            var lastErr = ""
+            var fixed: String? = null
+            val maxTry = 3
+            for (attempt in 1..maxTry) {
+                onStatus?.invoke("② 문맥 교정 ${i + 1}/${blocks.size} 블록 처리 중..." +
+                    if (attempt > 1) " (재시도 ${attempt - 1})" else "")
+                val r = callGeminiApi(activeModel, apiKey, makeTextContents(prompt), temperature = 0.2f)
+                val t = r.text.trim()
+                when {
+                    !r.success -> lastErr = r.text
+                    t.isBlank() -> lastErr = "응답이 비어 있습니다."
+                    t.length < block.length * 0.6 ->
+                        lastErr = "교정 결과가 원문보다 지나치게 짧아(${t.length}/${block.length}자) 요약된 것으로 보입니다."
+                    else -> { fixed = t }
+                }
+                if (fixed != null) break
+                Log.w("GeminiService", "문맥 교정 블록 ${i + 1} 시도 $attempt 실패: ${lastErr.take(160)}")
+                if (attempt < maxTry) {
+                    try { Thread.sleep(if (attempt == 1) 3000L else 8000L) } catch (_: InterruptedException) {}
+                }
+            }
+            if (fixed == null) {
+                throw PreciseStepException("문맥 교정 ${i + 1}/${blocks.size} 블록 실패 (3회 시도):\n$lastErr")
+            }
+            out.add(fixed)
+            onProgress?.invoke((i + 1) * 100 / blocks.size)
+        }
+        return out.joinToString("\n")
+    }
+
+    /** 단일(청크) 오디오 1개를 전사. 반복 루프 감지 시 높은 temperature 로 1회 재시도.
+     *  promptSuffix: v3.14 정밀 STT 추가 규칙(기존 STT 프롬프트 뒤에 덧붙임). 기본은 빈 문자열(기존 동작 동일). */
+    private fun transcribeOne(audioFile: File, apiKey: String, numSpeakers: Int, promptSuffix: String = ""): ServiceResult {
         val sizeMb = audioFile.length() / (1024.0 * 1024.0)
         if (sizeMb > 50) {
             return ServiceResult(false, "구간 크기(${String.format("%.1f", sizeMb)}MB)가 50MB를 초과합니다.\nCLOVA Speech를 사용해주세요.")
@@ -1348,15 +1547,23 @@ class GeminiService {
         }
 
         // ★ v3.7.4: 화자 태그 없는 줄글 프롬프트 + temperature 0.4 — 실측으로 반복 루프 없이 정상 전사 확인
-        var result = callGeminiApi(activeModel, apiKey, build(makeSttPrompt(numSpeakers)),
+        var result = callGeminiApi(activeModel, apiKey, build(makeSttPrompt(numSpeakers) + promptSuffix),
             temperature = 0.4f, thinkingBudget = 0)
 
-        // 만약 그래도 반복 루프가 감지되면 더 높은 temperature + 강한 반복 금지로 1회 재시도
-        if (result.success && looksDegenerate(result.text)) {
-            Log.w("GeminiService", "STT 반복 루프 감지 — 재시도(temp=0.9)")
-            val retry = callGeminiApi(activeModel, apiKey, build(makeSttPrompt(numSpeakers, strict = true)),
+        // ★ v3.14.0: 반복 루프 판정 = 기존 토큰 반복(looksDegenerate) OR 줄 내부 n-gram 루프(SttLoopGuard).
+        //   루프면 더 높은 temperature + 강한 반복 금지로 최대 2회 재시도(PC _chunked_transcribe 와 동일 횟수).
+        //   그래도 줄 내부 루프가 남으면 반복분을 1회만 남기고 '[반복 인식 N회 생략]'을 본문에 표시해 정리.
+        //   (정리본은 성공으로 반환 — 구간 실패로 처리하면 나머지 구간 결과까지 잃음)
+        for (loopTry in 1..2) {
+            if (!result.success || !isBadStt(result.text)) break
+            Log.w("GeminiService", "STT 반복 루프 감지 — 재시도 $loopTry/2 (temp=0.9)")
+            val retry = callGeminiApi(activeModel, apiKey, build(makeSttPrompt(numSpeakers, strict = true) + promptSuffix),
                 temperature = 0.9f, thinkingBudget = 0)
-            result = if (retry.success && !looksDegenerate(retry.text)) retry else result
+            if (retry.success && retry.text.isNotBlank() && !isBadStt(retry.text)) result = retry
+        }
+        if (result.success && SttLoopGuard.hasInlineLoop(result.text)) {
+            Log.w("GeminiService", "STT 줄 내부 반복 루프 재시도 후에도 남음 — 정리본 사용([반복 인식 N회 생략] 표시)")
+            result = ServiceResult(true, SttLoopGuard.collapseInlineLoops(result.text))
         }
         return result
     }
@@ -1366,7 +1573,8 @@ class GeminiService {
         apiKey: String,
         summaryMode: String = "speaker",
         customInstruction: String = "",
-        onProgress: ((Int) -> Unit)? = null
+        onProgress: ((Int) -> Unit)? = null,
+        precise: Boolean = false   // ★ v3.14: 정밀 요약 — 「📌 확인 필요」 섹션 보존 후 trim
     ): ServiceResult {
         if (apiKey.isBlank()) return ServiceResult(false, "Gemini API 키가 없습니다.")
         if (sttText.isBlank()) return ServiceResult(false, "변환된 텍스트가 비어 있습니다.")
@@ -1390,7 +1598,8 @@ class GeminiService {
 
         if (result.success) {
             onProgress?.invoke(100)
-            return ServiceResult(true, trimSummary(result.text))
+            return ServiceResult(true,
+                if (precise) relocateCheckSectionAndTrim(result.text) else trimSummary(result.text))
         }
         return result
     }
@@ -1447,6 +1656,9 @@ ${summaryText.take(100000)}
     }
 
     /** ★ v3.7.2: STT 결과가 반복 루프(degeneration)인지 판정 — 같은 토큰 20회 연속 또는 고유토큰 비율 극히 낮음 */
+    /** ★ v3.14.0: 기존 토큰 반복 루프 OR 줄 내부 1~4어절 반복 루프 (PC _is_bad_stt 대응) */
+    private fun isBadStt(text: String): Boolean = looksDegenerate(text) || SttLoopGuard.hasInlineLoop(text)
+
     private fun looksDegenerate(text: String): Boolean {
         val tokens = text.split(Regex("\\s+"))
             .filter { it.isNotBlank() && !it.matches(Regex("\\[.*\\]")) }
@@ -1491,6 +1703,26 @@ ${summaryText.take(100000)}
         "voice_memo" -> SUMMARY_VOICE_MEMO
         "raw" -> "{text}" // ★ v3.13: AI 창구(AiGatewayProvider) — 호출 앱이 보낸 프롬프트 그대로
         else -> SUMMARY_SPEAKER
+    }
+
+    /**
+     * ★ v3.14: 정밀 요약의 「📌 확인 필요」 섹션을 모델이 앱 푸터(마커) '뒤'에 써도 trimSummary 에 잘려
+     *   조용히 사라지지 않도록, 마커 앞(푸터 구분선 앞)으로 옮긴 뒤 trim 한다.
+     */
+    fun relocateCheckSectionAndTrim(text: String): String {
+        val marker = "회의녹음요약 앱 자동 생성"
+        val header = "## 📌 확인 필요"
+        val mIdx = text.indexOf(marker)
+        val sIdx = text.lastIndexOf(header)
+        if (mIdx < 0 || sIdx < 0 || sIdx < mIdx) return trimSummary(text)
+        val section = text.substring(sIdx).trim()
+        val head = text.substring(0, mIdx + marker.length)
+        // 푸터 블록(마지막 구분선들) 앞에 삽입 — 없으면 마커 바로 앞
+        var pos = head.lastIndexOf("\n---", mIdx)
+        val prev = if (pos > 0) head.lastIndexOf("\n---", pos - 1) else -1
+        if (prev >= 0 && head.substring(prev, pos).let { it.length < 400 && "자동 작성" in it }) pos = prev  // "본 회의록은 … AI가 자동 작성" 안내문 블록까지 포함
+        if (pos < 0) pos = mIdx
+        return (head.substring(0, pos).trimEnd() + "\n\n" + section + "\n" + head.substring(pos)).trim()
     }
 
     private fun trimSummary(text: String): String {
