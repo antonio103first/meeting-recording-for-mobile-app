@@ -4,6 +4,11 @@
 
 ---
 
+## [v3.14.3] — 2026-11-05 (versionCode 56)
+
+### 변경 (Changed)
+- **STT 기본 엔진을 Clova 로 환원** — v3.14.2 의 Gemini 3.1 pro 기본이 너무 느림. `ConfigManager.sttEngine` 기본 clova, `STT_MODEL`=2.5-flash(폴백 동일 → 재호출 없음). 빈 전사 감지·Clova 폴백은 유지.
+
 ## [v3.14.2] — 2026-11-05 (versionCode 55)
 
 ### 변경 (Changed)

@@ -36,7 +36,8 @@ class GeminiService {
             "gemini-pro"
         )
         // ★ v3.14.2: STT 1차 모델 = 3.1 pro(2026-11-05 PC 실측: Clova·flash 대비 고유명사·전문용어 정확), 실패·빈 결과 시 flash 폴백
-        const val STT_MODEL = "gemini-3.1-pro-preview"
+        // 2026-11-05: 3.1-pro-preview 는 정확하나 느려 flash 로 환원. 전환 시 STT_MODEL 만 바꾸고 FALLBACK 을 flash 로 둘 것.
+        const val STT_MODEL = "gemini-2.5-flash"
         const val STT_FALLBACK_MODEL = "gemini-2.5-flash"
         const val SUMMARY_MODEL = "gemini-2.5-flash"
         private const val BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
@@ -1558,6 +1559,7 @@ class GeminiService {
         val sizeMb = audioFile.length() / (1024.0 * 1024.0)
         val first = transcribeOneWith(STT_MODEL, audioFile, apiKey, numSpeakers, promptSuffix)
         if (first.success && !isEmptyStt(first.text, sizeMb)) { lastSttModel = STT_MODEL; return first }
+        if (STT_FALLBACK_MODEL == STT_MODEL) { if (first.success) lastSttModel = STT_MODEL; return first }  // 폴백 모델이 같으면 재호출 없이 그대로 반환
         Log.w("GeminiService", "STT ${STT_MODEL} ${if (first.success) "빈 결과" else "실패"} → ${STT_FALLBACK_MODEL} 폴백: ${first.text.take(100)}")
         val second = transcribeOneWith(STT_FALLBACK_MODEL, audioFile, apiKey, numSpeakers, promptSuffix)
         if (second.success) lastSttModel = STT_FALLBACK_MODEL
