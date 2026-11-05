@@ -4,6 +4,14 @@
 
 ---
 
+## [v3.14.2] — 2026-11-05 (versionCode 55)
+
+### 변경 (Changed)
+- **STT 기본 엔진 Clova → Gemini** (`ConfigManager.sttEngine` 기본값). 1차 모델 `gemini-3.1-pro-preview`, 실패·빈 결과 시 `gemini-2.5-flash` 폴백(`GeminiService.transcribeOne`). Gemini 모든 시도 실패 시 Clova 키가 있으면 자동 폴백(`RecordingViewModel.runStt`). 회의록 말미에 실제 사용 모델 표기.
+- pro 계열은 thinking 을 끌 수 없어(`thinkingBudget=0` → 400) flash 에만 `thinkingBudget=0` 적용.
+- 빈 전사 감지 `isEmptyStt` — 화자 태그·`[불명확]`만 있고 본문 30자 미만이면 실패로 간주. 사유: 2026-11-05 PC 실측에서 pro 가 7.7MB 파일에 `[화자1]: [불명확]` 12자만 반환하고 성공 처리된 사례.
+- 근거: Clova 대비 고유명사·전문용어·발언자 구분이 4건 모두 우수(PC 비교). 단 모바일 STT 프롬프트는 v3.7.4 의 '화자 태그 없는 줄글' 그대로(반복 루프 방지) — 화자 구분은 요약 단계 추론에 의존.
+
 ## [v3.14.1] — 2026-11-05 (versionCode 54)
 
 ### 변경 (Changed)

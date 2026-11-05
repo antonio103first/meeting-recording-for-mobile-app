@@ -35,7 +35,9 @@ class GeminiService {
             "gemini-1.5-flash",
             "gemini-pro"
         )
-        const val STT_MODEL = "gemini-2.5-flash"
+        // ★ v3.14.2: STT 1차 모델 = 3.1 pro(2026-11-05 PC 실측: Clova·flash 대비 고유명사·전문용어 정확), 실패·빈 결과 시 flash 폴백
+        const val STT_MODEL = "gemini-3.1-pro-preview"
+        const val STT_FALLBACK_MODEL = "gemini-2.5-flash"
         const val SUMMARY_MODEL = "gemini-2.5-flash"
         private const val BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 
@@ -1539,7 +1541,30 @@ class GeminiService {
 
     /** 단일(청크) 오디오 1개를 전사. 반복 루프 감지 시 높은 temperature 로 1회 재시도.
      *  promptSuffix: v3.14 정밀 STT 추가 규칙(기존 STT 프롬프트 뒤에 덧붙임). 기본은 빈 문자열(기존 동작 동일). */
+    /** 마지막으로 STT에 성공한 모델(회의록 표기용) */
+    @Volatile var lastSttModel: String = ""
+
+    /** pro 계열은 thinking 을 끌 수 없음(thinkingBudget=0 → 400 "only works in thinking mode") — flash 만 0 */
+    private fun sttThinking(model: String): Int? = if (model.contains("flash")) 0 else null
+
+    /** 화자 태그·[불명확]만 있고 내용이 없는 사실상 빈 전사 (pro 가 '[화자1]: [불명확]'만 돌려준 사례 대응) */
+    private fun isEmptyStt(text: String, sizeMb: Double): Boolean {
+        val body = text.replace(Regex("\\[[^\\]\\n]{0,20}\\]:?"), "").replace(Regex("\\s+"), "")
+        return sizeMb >= 0.3 && body.length < 30
+    }
+
+    /** 1차(pro) → 실패·빈 결과면 flash 폴백. flash 결과는 그대로 채택(무음 구간 등 정상적으로 빈 경우 허용) */
     private fun transcribeOne(audioFile: File, apiKey: String, numSpeakers: Int, promptSuffix: String = ""): ServiceResult {
+        val sizeMb = audioFile.length() / (1024.0 * 1024.0)
+        val first = transcribeOneWith(STT_MODEL, audioFile, apiKey, numSpeakers, promptSuffix)
+        if (first.success && !isEmptyStt(first.text, sizeMb)) { lastSttModel = STT_MODEL; return first }
+        Log.w("GeminiService", "STT ${STT_MODEL} ${if (first.success) "빈 결과" else "실패"} → ${STT_FALLBACK_MODEL} 폴백: ${first.text.take(100)}")
+        val second = transcribeOneWith(STT_FALLBACK_MODEL, audioFile, apiKey, numSpeakers, promptSuffix)
+        if (second.success) lastSttModel = STT_FALLBACK_MODEL
+        return second
+    }
+
+    private fun transcribeOneWith(model: String, audioFile: File, apiKey: String, numSpeakers: Int, promptSuffix: String = ""): ServiceResult {
         val sizeMb = audioFile.length() / (1024.0 * 1024.0)
         if (sizeMb > 50) {
             return ServiceResult(false, "구간 크기(${String.format("%.1f", sizeMb)}MB)가 50MB를 초과합니다.\nCLOVA Speech를 사용해주세요.")
@@ -1574,8 +1599,8 @@ class GeminiService {
         }
 
         // ★ v3.7.4: 화자 태그 없는 줄글 프롬프트 + temperature 0.4 — 실측으로 반복 루프 없이 정상 전사 확인
-        var result = callGeminiApi(activeModel, apiKey, build(makeSttPrompt(numSpeakers) + promptSuffix),
-            temperature = 0.4f, thinkingBudget = 0)
+        var result = callGeminiApi(model, apiKey, build(makeSttPrompt(numSpeakers) + promptSuffix),
+            temperature = 0.4f, thinkingBudget = sttThinking(model))
 
         // ★ v3.14.0: 반복 루프 판정 = 기존 토큰 반복(looksDegenerate) OR 줄 내부 n-gram 루프(SttLoopGuard).
         //   루프면 더 높은 temperature + 강한 반복 금지로 최대 2회 재시도(PC _chunked_transcribe 와 동일 횟수).
@@ -1584,8 +1609,8 @@ class GeminiService {
         for (loopTry in 1..2) {
             if (!result.success || !isBadStt(result.text)) break
             Log.w("GeminiService", "STT 반복 루프 감지 — 재시도 $loopTry/2 (temp=0.9)")
-            val retry = callGeminiApi(activeModel, apiKey, build(makeSttPrompt(numSpeakers, strict = true) + promptSuffix),
-                temperature = 0.9f, thinkingBudget = 0)
+            val retry = callGeminiApi(model, apiKey, build(makeSttPrompt(numSpeakers, strict = true) + promptSuffix),
+                temperature = 0.9f, thinkingBudget = sttThinking(model))
             if (retry.success && retry.text.isNotBlank() && !isBadStt(retry.text)) result = retry
         }
         if (result.success && SttLoopGuard.hasInlineLoop(result.text)) {

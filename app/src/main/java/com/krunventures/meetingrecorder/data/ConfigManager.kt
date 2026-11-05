@@ -37,7 +37,7 @@ class ConfigManager(private val context: Context) {
 
     // === Engine Selection ===
     var sttEngine: String
-        get() = prefs.getString("stt_engine", "clova") ?: "clova"
+        get() = prefs.getString("stt_engine", "gemini") ?: "gemini"
         set(v) = prefs.edit().putString("stt_engine", v).apply()
 
     var aiEngine: String

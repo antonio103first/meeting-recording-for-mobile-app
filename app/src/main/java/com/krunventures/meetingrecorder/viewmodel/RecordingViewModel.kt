@@ -1306,7 +1306,11 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
                     Log.e(TAG, "STT execution failed (attempt $attempt): ${e.message}", e)
                     Pair(false, "STT 변환 중 오류: ${e.message?.take(200) ?: "알 수 없는 오류"}")
                 }
-                if (r.first) { lastSttEngineUsed = engineLabel; return r }
+                if (r.first) {
+                    lastSttEngineUsed = if (engine == "gemini" && geminiService.lastSttModel.isNotBlank())
+                        "Gemini (${geminiService.lastSttModel})" else engineLabel
+                    return r
+                }
                 lastErr = r.second
                 if (!isNetworkError(lastErr)) return r  // 키·형식 등 비네트워크 오류는 즉시 반환(재시도 무의미)
                 Log.w(TAG, "STT 네트워크 오류 — 재시도 예정 (attempt $attempt/$maxTry): ${lastErr.take(120)}")
@@ -1314,6 +1318,24 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
             // ★ v3.7.21: Clova/Whisper 재시도 모두 실패 시 — Gemini STT로 자동 폴백.
             //   Gemini는 10분 청크로 전사(요청 하나가 짧음)해 '긴 유휴 연결' 취약성을 우회 → 긴 파일에 강함.
             //   (Clova 동기 STT는 87분 파일을 한 연결로 수십 분 붙잡아 간헐 abort. 수동 재시도 없이 자동 이어받음.)
+            // ★ v3.14.2: 기본 엔진이 Gemini 이므로 반대 방향 폴백 추가 — Gemini 모든 시도 실패 시 Clova 가 키가 있으면 이어받음
+            if (engine == "gemini" && config.clovaInvokeUrl.isNotBlank() && config.clovaSecretKey.isNotBlank()) {
+                Log.w(TAG, "Gemini STT 실패 → CLOVA STT 자동 폴백")
+                updateUiState { it.copy(sttStatus = "Gemini 실패 → CLOVA STT로 자동 전환 중…", sttProgress = 0) }
+                val cr = try {
+                    clovaService.transcribe(
+                        audioFile = audioFile, invokeUrl = config.clovaInvokeUrl,
+                        secretKey = config.clovaSecretKey, numSpeakers = config.getEffectiveNumSpeakers(),
+                        onProgress = safeOnProgress, onStatus = safeOnStatus
+                    ).let { Pair(it.success, it.text) }
+                } catch (e: Exception) {
+                    Log.e(TAG, "CLOVA STT 폴백 실패: ${e.message}", e); Pair(false, e.message ?: "")
+                }
+                if (cr.first && cr.second.isNotBlank()) {
+                    lastSttEngineUsed = "CLOVA Speech (Gemini 실패 → 자동 폴백)"
+                    return cr
+                }
+            }
             if (engine != "gemini" && config.geminiApiKey.isNotBlank()) {
                 Log.w(TAG, "$engineLabel STT ${maxTry}회 실패 → Gemini STT 자동 폴백")
                 updateUiState { it.copy(
