@@ -1,6 +1,6 @@
 # CLAUDE.md — 회의녹음요약 모바일 앱 v3.14.6
 
-> v3.14.6 (2026-11-05): **`[케이런]`→`[김정현 대표]` 표기 변경 + 인물 지칭·귀속 규칙 (versionCode 59, PC v4.1.5 동시).** `REFERENT_CAUTION`(voice_memo·raw 제외 전 양식). 인명 사전은 PC만. 컴파일·설치만 확인, **미검증**: 실녹음.
+> v3.14.6 (2026-11-05): **`[케이런]`→`[김정현 대표]` 표기 변경 + 인물 지칭·귀속 규칙 (versionCode 59, PC v4.1.5 동시).** `REFERENT_CAUTION`(voice_memo·raw 제외 전 양식). 인명 사전은 PC만. 빌드만 확인, **폰 설치 미실시**, **미검증**: 실녹음.
 > v3.14.5 (2026-11-05): **화자 혼선 대응 (versionCode 58, PC v4.1.4 동시).** `correctTranscript(fixSpeakers=true)` 로 화자 태그 교정 + `speakerTagsOk` 검증, 요약 `SPEAKER_CAUTION`(speaker·ir_md·org·voice_memo·raw 제외). 효과·한계는 CHANGELOG 참조. 설치 확인(3.14.5/58), **미검증**: 실녹음.
 > v3.14.4 (2026-11-05): **STT 후 문맥 교정 (versionCode 57, PC v4.1.3 동시).** `RecordingViewModel.runStt` 가 `runSttRaw` 결과를 `GeminiService.correctTranscript` 로 교정(`ConfigManager.sttRefine` 기본 켜짐, thinkingBudget=1024 — PC 실측 기본 113초→25초, 교정 동급). 실패 시 원문 사용 + 회의록 STT 엔진 표기에 사유. 화자 태그는 교정 못 함. 빌드 성공, **미검증**: 실기기 설치(빌드 시점 폰 연결 없음)·실녹음 동작.
 > v3.14.3 (2026-11-05): **STT 기본 엔진 Clova 로 환원 (versionCode 56, PC v4.1.2 동시).** Gemini 3.1 pro STT 가 너무 느리다는 판단. `ConfigManager.sttEngine` 기본값 clova, `GeminiService.STT_MODEL`=2.5-flash(`STT_FALLBACK_MODEL` 동일 → 재호출 없음). 빈 전사 감지·Gemini 실패 시 Clova 폴백 코드는 유지. 폰 저장값은 adb 로 환원(폰 연결 시).
