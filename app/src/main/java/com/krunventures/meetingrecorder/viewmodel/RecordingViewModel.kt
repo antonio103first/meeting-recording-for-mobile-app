@@ -1246,7 +1246,30 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
             "ssl", "unable to resolve host", "unknownhost", "econn", "broken pipe").any { m.contains(it) }
     }
 
+    /** STT 실행 + (옵션) 문맥 교정. 교정 실패 시 원문을 쓰되 엔진 표기에 사유를 남긴다(조용한 대체 금지). */
     private suspend fun runStt(audioFile: File): Pair<Boolean, String> {
+        val r = runSttRaw(audioFile)
+        if (!r.first || !config.sttRefine || config.geminiApiKey.isBlank() || r.second.isBlank()) return r
+        updateUiState { it.copy(sttStatus = "STT 문맥 교정 중...") }
+        return try {
+            val fixed = withContext(Dispatchers.IO) {
+                geminiService.correctTranscript(
+                    sttText = r.second, apiKey = config.geminiApiKey, context = "",
+                    onStatus = { s -> viewModelScope.launch(Dispatchers.Main) {
+                        _uiState.value = _uiState.value.copy(sttStatus = s) } }
+                )
+            }
+            lastSttEngineUsed += " + 문맥교정"
+            Pair(true, fixed)
+        } catch (e: Exception) {
+            Log.w(TAG, "문맥 교정 실패 — 원문 사용: ${e.message}")
+            lastSttEngineUsed += " (문맥교정 실패 — 원문 사용)"
+            updateUiState { it.copy(sttStatus = "⚠️ 문맥 교정 실패, 원문 사용") }
+            r
+        }
+    }
+
+    private suspend fun runSttRaw(audioFile: File): Pair<Boolean, String> {
         val engine = config.sttEngine
         val engineLabel = when (engine) {
             "clova" -> "CLOVA Speech"

@@ -40,6 +40,11 @@ class ConfigManager(private val context: Context) {
         get() = prefs.getString("stt_engine", "clova") ?: "clova"
         set(v) = prefs.edit().putString("stt_engine", v).apply()
 
+    /** v3.14.4: STT 후 Gemini 텍스트 문맥 교정(오인식 단어 수정) — 기본 켜짐 */
+    var sttRefine: Boolean
+        get() = prefs.getBoolean("stt_refine", true)
+        set(v) = prefs.edit().putBoolean("stt_refine", v).apply()
+
     var aiEngine: String
         get() = prefs.getString("ai_engine", "gemini") ?: "gemini"
         set(v) = prefs.edit().putString("ai_engine", v).apply()

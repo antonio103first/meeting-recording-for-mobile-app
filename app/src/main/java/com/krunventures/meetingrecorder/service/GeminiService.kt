@@ -1516,7 +1516,7 @@ class GeminiService {
             for (attempt in 1..maxTry) {
                 onStatus?.invoke("② 문맥 교정 ${i + 1}/${blocks.size} 블록 처리 중..." +
                     if (attempt > 1) " (재시도 ${attempt - 1})" else "")
-                val r = callGeminiApi(activeModel, apiKey, makeTextContents(prompt), temperature = 0.2f)
+                val r = callGeminiApi(activeModel, apiKey, makeTextContents(prompt), temperature = 0.2f, thinkingBudget = 1024)  // v3.14.4: 속도·품질 균형(PC 실측 25초)
                 val t = r.text.trim()
                 when {
                     !r.success -> lastErr = r.text

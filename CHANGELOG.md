@@ -4,6 +4,11 @@
 
 ---
 
+## [v3.14.4] — 2026-11-05 (versionCode 57)
+
+### 추가 (Added)
+- **STT 후 문맥 교정** — 전사 직후 `correctTranscript`(정밀 재변환 ② 단계)를 일반 파이프라인에도 적용. `ConfigManager.sttRefine`(기본 켜짐). thinkingBudget=1024(PC 실측: 기본 113초 → 25초, 교정 품질 동급). 실패 시 원문 사용 + 회의록 STT 엔진 표기에 사유 명시. 화자 태그는 교정하지 못함. PC v4.1.3 동시. 실기기 설치·동작은 미검증.
+
 ## [v3.14.3] — 2026-11-05 (versionCode 56)
 
 ### 변경 (Changed)
