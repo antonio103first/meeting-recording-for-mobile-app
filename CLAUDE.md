@@ -1,5 +1,6 @@
-# CLAUDE.md — 회의녹음요약 모바일 앱 v3.14.4
+# CLAUDE.md — 회의녹음요약 모바일 앱 v3.14.5
 
+> v3.14.5 (2026-11-05): **화자 혼선 대응 (versionCode 58, PC v4.1.4 동시).** `correctTranscript(fixSpeakers=true)` 로 화자 태그 교정 + `speakerTagsOk` 검증, 요약 `SPEAKER_CAUTION`(speaker·ir_md·org·voice_memo·raw 제외). 효과·한계는 CHANGELOG 참조. 설치 확인(3.14.5/58), **미검증**: 실녹음.
 > v3.14.4 (2026-11-05): **STT 후 문맥 교정 (versionCode 57, PC v4.1.3 동시).** `RecordingViewModel.runStt` 가 `runSttRaw` 결과를 `GeminiService.correctTranscript` 로 교정(`ConfigManager.sttRefine` 기본 켜짐, thinkingBudget=1024 — PC 실측 기본 113초→25초, 교정 동급). 실패 시 원문 사용 + 회의록 STT 엔진 표기에 사유. 화자 태그는 교정 못 함. 빌드 성공, **미검증**: 실기기 설치(빌드 시점 폰 연결 없음)·실녹음 동작.
 > v3.14.3 (2026-11-05): **STT 기본 엔진 Clova 로 환원 (versionCode 56, PC v4.1.2 동시).** Gemini 3.1 pro STT 가 너무 느리다는 판단. `ConfigManager.sttEngine` 기본값 clova, `GeminiService.STT_MODEL`=2.5-flash(`STT_FALLBACK_MODEL` 동일 → 재호출 없음). 빈 전사 감지·Gemini 실패 시 Clova 폴백 코드는 유지. 폰 저장값은 adb 로 환원(폰 연결 시).
 > v3.14.2 (2026-11-05): **STT 기본 엔진 Clova → Gemini (versionCode 55, PC Roundtable v4.1.1 동시).** 1차 `gemini-3.1-pro-preview`, 실패·빈 결과 시 `gemini-2.5-flash` 폴백(`GeminiService.transcribeOne`), Gemini 전 시도 실패 시 Clova 자동 폴백(`RecordingViewModel.runStt`). pro 는 thinking 을 끌 수 없어 `thinkingBudget=0` 은 flash 에만 적용(pro 에 보내면 400). 빈 전사 감지 `isEmptyStt`. ⚠️ 모바일 STT 프롬프트는 v3.7.4 의 화자 태그 없는 줄글 그대로라 화자 구분은 요약 단계 추론에 의존(PC 와 다름). 기존 폰에 저장된 `stt_engine=clova` 는 기본값이 안 먹으므로 설정을 직접 바꿔야 함(이번엔 adb 로 gemini 로 변경). 실녹음 end-to-end 는 미검증(컴파일·설치만).

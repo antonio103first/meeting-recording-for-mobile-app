@@ -1365,6 +1365,44 @@ class GeminiService {
 - 화자를 표기할 때는 [참고 문맥]의 이름을 쓰고, 모든 구간에서 같은 사람은 같은 표기를 유지합니다. 누구인지 확신이 없으면 기본 규칙의 표기 방식을 따릅니다.
 - 같은 문장을 반복해서 적지 않습니다(실제로 되풀이해 말한 경우만 적음). 알아듣기 어려운 구간이 이어지면 [불명확] 한 줄로 묶습니다."""
 
+    /** v3.14.5: 발언자 구분이 핵심인 양식은 발언자 표기 제한에서 제외 */
+    private val SPEAKER_CENTRIC_MODES = setOf("speaker", "ir_md", "org", "voice_memo", "raw")
+
+    private val SPEAKER_CAUTION = """
+
+
+[발언자 표기 제한 — 반드시 준수, 위의 화자 구분·표기 규칙과 충돌하면 이 규칙이 우선]
+- STT의 [화자N] 태그는 자주 틀립니다(한 사람이 여러 번호로 쪼개지거나, 두 사람이 한 번호로 합쳐짐). 번호 하나를 한 사람으로 가정하지 마십시오.
+- 화자 번호마다 역할명(기술 담당자·연구원·개발자·책임자 등)을 지어 붙이지 마십시오. 녹취에서 그 호칭·직함이 직접 언급된 경우가 아니면 쓰지 않습니다.
+- 발언자가 분명한 경우(자기 소개, 이름 호명, 본인만 알 수 있는 사실)에만 이름·역할을 쓰고, 그 외에는 상대방 전체를 `[상대방]` 하나로 통칭하거나 주어 없이 내용만 서술합니다. `[상대방1]`/`[상대방2]` 식의 구분은 서로 다른 사람임이 확실할 때만 씁니다.
+- 같은 내용을 여러 발언자가 말한 것처럼 중복 서술하지 말고, 한 사람의 발언이 번호만 달리 반복된 것으로 보이면 하나로 합칩니다.
+- `[화자1]`, `[화자2]` 같은 번호 표기는 요약 본문에 쓰지 않습니다."""
+
+    private val SPEAKER_FIX_ADDON = """[화자 태그 교정 — 규칙 2의 '화자 태그 유지'에 대한 예외]
+이 녹취록의 [화자N] 태그는 음성 자동 구분 결과라 틀린 곳이 많습니다. 아래 경우에 한해 태그를 바로잡습니다.
+- 질문 뒤의 짧은 대답("네", "아니요", "맞아요")이 질문한 사람과 같은 번호로 붙어 있으면, 대답한 사람의 태그로 바꿉니다.
+- 한 줄 안에 서로 다른 사람의 말이 섞여 있으면(예: 질문과 그에 대한 대답이 한 줄), 줄을 나누어 각자의 태그를 붙입니다.
+- 문장이 중간에 끊겨 다른 번호로 이어진 경우(예: "일단 저희가 지난번에" / "보내드렸던")는 같은 사람의 태그로 통일합니다.
+- 같은 사람이 번호만 다르게 쪼개진 것이 분명하면 하나의 번호로 통일합니다.
+- 확신이 없으면 원래 태그를 그대로 둡니다. 존재하지 않던 새 번호를 만들지 않고, 발언 내용은 바꾸지 않습니다.
+"""
+
+    /** 줄머리 `[화2]`·`[화 자2]` 같은 변형 태그를 `[화자2]` 로 복구 */
+    private fun normalizeSpeakerTags(text: String): String =
+        Regex("(?m)^\\[화\\s?자?\\s?(\\d+)\\]").replace(text) { "[화자" + it.groupValues[1] + "]" }
+
+    /** 교정본 태그 검증: 원문에 없던 번호가 생기지 않았고, 원문이 전 줄 태그형이면 교정본도 전 줄 태그형 */
+    private fun speakerTagsOk(orig: String, fixed: String): Boolean {
+        val tag = Regex("^\\[화자(\\d+)\\]")
+        val o = orig.lines().filter { it.isNotBlank() }
+        val f = fixed.lines().filter { it.isNotBlank() }
+        val oTags = o.mapNotNull { tag.find(it)?.groupValues?.get(1) }.toSet()
+        val fTags = f.mapNotNull { tag.find(it)?.groupValues?.get(1) }.toSet()
+        if (!oTags.containsAll(fTags)) return false
+        if (o.isNotEmpty() && o.all { tag.containsMatchIn(it) }) return f.all { tag.containsMatchIn(it) }
+        return true
+    }
+
     private val PRECISE_REFINE_PROMPT = """당신은 한국어 회의 녹취록 교정 전문가입니다.
 아래는 음성인식(STT)으로 만든 회의 녹취록의 일부({part}/{total})입니다. 음성인식 오류를 교정해 주세요.
 
@@ -1497,7 +1535,8 @@ class GeminiService {
         apiKey: String,
         context: String,
         onProgress: ((Int) -> Unit)? = null,
-        onStatus: ((String) -> Unit)? = null
+        onStatus: ((String) -> Unit)? = null,
+        fixSpeakers: Boolean = false   // v3.14.5: 화자 태그도 교정(+태그 손상 검증)
     ): String {
         if (apiKey.isBlank()) throw PreciseStepException("Gemini API 키가 없습니다.")
         if (sttText.isBlank()) throw PreciseStepException("교정할 STT 텍스트가 비어 있습니다.")
@@ -1505,7 +1544,10 @@ class GeminiService {
         val ctx = context.trim().ifEmpty { "(없음)" }
         val out = mutableListOf<String>()
         for ((i, block) in blocks.withIndex()) {
-            val prompt = PRECISE_REFINE_PROMPT
+            val promptTemplate = if (fixSpeakers)
+                PRECISE_REFINE_PROMPT.replace("[참고 문맥]\n{context}", SPEAKER_FIX_ADDON + "\n[참고 문맥]\n{context}")
+            else PRECISE_REFINE_PROMPT
+            val prompt = promptTemplate
                 .replace("{part}", (i + 1).toString())
                 .replace("{total}", blocks.size.toString())
                 .replace("{context}", ctx)
@@ -1517,12 +1559,14 @@ class GeminiService {
                 onStatus?.invoke("② 문맥 교정 ${i + 1}/${blocks.size} 블록 처리 중..." +
                     if (attempt > 1) " (재시도 ${attempt - 1})" else "")
                 val r = callGeminiApi(activeModel, apiKey, makeTextContents(prompt), temperature = 0.2f, thinkingBudget = 1024)  // v3.14.4: 속도·품질 균형(PC 실측 25초)
-                val t = r.text.trim()
+                val t = if (fixSpeakers) normalizeSpeakerTags(r.text.trim()) else r.text.trim()
                 when {
                     !r.success -> lastErr = r.text
                     t.isBlank() -> lastErr = "응답이 비어 있습니다."
                     t.length < block.length * 0.6 ->
                         lastErr = "교정 결과가 원문보다 지나치게 짧아(${t.length}/${block.length}자) 요약된 것으로 보입니다."
+                    fixSpeakers && !speakerTagsOk(block, t) ->
+                        lastErr = "화자 태그가 손상되었거나 없던 번호가 생겼습니다."
                     else -> { fixed = t }
                 }
                 if (fixed != null) break
@@ -1645,6 +1689,8 @@ class GeminiService {
         if (customInstruction.isNotBlank()) {
             prompt += "\n\n[추가 지시사항]\n${customInstruction.trim()}"
         }
+        // v3.14.5: 화자 중심이 아닌 양식은 발언자 귀속을 확실할 때만 (STT 화자 태그 오류 대응)
+        if (summaryMode !in SPEAKER_CENTRIC_MODES) prompt += SPEAKER_CAUTION
         onProgress?.invoke(30)
 
         val contents = makeTextContents(prompt)

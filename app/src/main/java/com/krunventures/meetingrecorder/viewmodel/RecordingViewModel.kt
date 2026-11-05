@@ -1255,6 +1255,7 @@ class RecordingViewModel(app: Application) : AndroidViewModel(app) {
             val fixed = withContext(Dispatchers.IO) {
                 geminiService.correctTranscript(
                     sttText = r.second, apiKey = config.geminiApiKey, context = "",
+                    fixSpeakers = true,
                     onStatus = { s -> viewModelScope.launch(Dispatchers.Main) {
                         _uiState.value = _uiState.value.copy(sttStatus = s) } }
                 )

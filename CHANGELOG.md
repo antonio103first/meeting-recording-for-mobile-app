@@ -4,6 +4,11 @@
 
 ---
 
+## [v3.14.5] — 2026-11-05 (versionCode 58)
+
+### 변경 (Changed)
+- **화자 혼선 대응 (PC v4.1.4 동시)** — ① 문맥 교정 시 화자 태그도 교정(`correctTranscript(fixSpeakers=true)`: 질문 뒤 짧은 대답·한 줄에 섞인 두 사람·끊긴 문장 기준, 확신 없으면 유지) + 태그 손상(`[화2]`)/없던 번호 검증(`normalizeSpeakerTags`·`speakerTagsOk`, 실패 시 블록 재시도). ② 요약: speaker·ir_md·org·voice_memo·raw 외 양식에 `SPEAKER_CAUTION` 추가 — 화자 번호별 역할명 지어내기 금지, 불분명하면 `[상대방]` 통칭·주어 생략. PC 실측(Clova 전사 id 348): 지어낸 역할 4종 → `[상대방]` 수렴. 태그 교정 효과 자체는 작음(1~2곳). 컴파일·설치만 확인, 실녹음 동작 미검증.
+
 ## [v3.14.4] — 2026-11-05 (versionCode 57)
 
 ### 추가 (Added)
