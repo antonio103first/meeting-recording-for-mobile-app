@@ -34,3 +34,4 @@ Thumbs.db
 
 # releases 폴더 APK 허용
 !releases/*.apk
+.kotlin/
